@@ -1,0 +1,10 @@
+# Nix build outputs
+result
+result-*
+
+# Editor / OS cruft
+*.swp
+*.swo
+*~
+.direnv/
+.DS_Store
