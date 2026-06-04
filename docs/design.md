@@ -108,9 +108,10 @@ disk (default, maximal isolation) or the host store shared over 9p
 "erase your darlings" pattern, so first-boot risk is low.
 
 Boot is **direct kernel boot**: no bootloader. `mkccvm` extracts the kernel + initrd and
-hands QEMU `-kernel/-initrd/-append`. The initrd is the **scripted** (non-systemd) one —
-the long-proven path for tmpfs-root + ro-store. (NixOS warns scripted initrd is
-deprecated for 26.11; switching to systemd-initrd is a known future step.)
+hands QEMU `-kernel/-initrd/-append`. The initrd is the **systemd** one (the scripted
+initrd is deprecated upstream for 26.11); it mounts the tmpfs root and read-only squashfs
+store from generated units, with the virtio transports and `squashfs`/`overlay` modules
+forced into the initrd so the store device and overlay are available before switch-root.
 
 ### 3.5 The seed: a read-only 9p share for per-invocation inputs
 
@@ -159,6 +160,14 @@ For OAuth users, `shareHostCredentials = true` instead mounts `~/.claude` read-o
 copies it into a writable guest `~/.claude`; token refreshes stay in the ephemeral tmpfs
 and do not persist back (a documented trade-off).
 
+A key is **not required**, though. With neither `ANTHROPIC_API_KEY` set nor
+`shareHostCredentials` enabled, the wrapper warns (it no longer aborts) and starts claude
+unauthenticated, so the in-VM **`/login` web-auth flow** works: claude prints an
+authorization URL, you open it in your host browser and paste the resulting code back into
+the TUI. No inbound connection to the guest is needed (the code is pasted, not delivered to
+a callback), so nothing about the network model changes. The credentials claude writes to
+its tmpfs `~/.claude` are, like everything else in the VM, discarded on exit.
+
 ### 3.8 The microvm.nix runtime-share trap
 
 It is tempting to declare the workspace 9p mount inside the guest NixOS config (or to use
@@ -190,7 +199,8 @@ off any real network and nothing should be reaching *in* except the forwarded po
 1. Parse args: peel off ccvm-only flags (`--shell`, `--ccvm-debug`); everything else is
    forwarded to claude. Resolve mode (overlay/rw) and acceleration (KVM if usable, else
    TCG; `CCVM_ACCEL=tcg` forces software emulation for broken nested-virt hosts).
-2. Gate on the API key (unless using host credentials) — fail early and clearly.
+2. Check auth: if no API key and no shared host credentials, warn (don't abort) so the
+   in-VM `/login` web-auth flow can run.
 3. Make a scratch dir under `$XDG_RUNTIME_DIR`; arm a single `trap cleanup EXIT INT TERM
    HUP`.
 4. Generate two throw-away ed25519 keys (client identity + guest host key); pin the host
@@ -237,6 +247,4 @@ session itself ends.
   see the README checklist.
 - **aarch64-linux is best-effort.** It evaluates and is wired up, but the primary,
   CI-built target is x86_64-linux.
-- **Scripted initrd** is deprecated upstream for 26.11; a systemd-initrd switch is a
-  planned follow-up.
 - **OAuth token refresh does not persist** back to the host (§3.7).

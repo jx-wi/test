@@ -131,12 +131,13 @@ else
   CPU="max"
 fi
 
-# The API key never touches disk or argv: it rides the encrypted SSH channel via
-# SendEnv -> AcceptEnv. Here we only check it exists (unless using host credentials).
-if [[ $SHAREHOSTCREDS != 1 ]]; then
-  if [[ -z ${!APIKEYVAR:-} ]]; then
-    die "\$$APIKEYVAR is not set. Export your Anthropic API key, or enable programs.ccvm.shareHostCredentials. ccvm never writes it to disk."
-  fi
+# Auth is optional. If present, the API key rides the encrypted SSH channel via
+# SendEnv -> AcceptEnv — never on disk or argv. With neither a key nor shared host
+# credentials, claude simply starts unauthenticated: run its in-VM `/login` (web/OAuth)
+# flow — copy the printed URL into your browser, paste the code back. Anything obtained
+# that way lives only in the VM's tmpfs and evaporates on exit (ephemeral, by design).
+if [[ $SHELL_MODE != 1 && $SHAREHOSTCREDS != 1 && -z ${!APIKEYVAR:-} ]]; then
+  warn "\$$APIKEYVAR is not set and shareHostCredentials is off — starting Claude unauthenticated. Run /login inside the VM for web auth (its credentials stay in the VM and vanish on exit)."
 fi
 
 # ---- scratch dir + trap ----------------------------------------------------

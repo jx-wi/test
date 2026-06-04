@@ -45,7 +45,7 @@ Requires a Linux box with **Nix** and **flakes** enabled (KVM strongly recommend
 speed; it falls back to slow software emulation otherwise).
 
 ```sh
-export ANTHROPIC_API_KEY=sk-ant-...     # ccvm reads it from the environment
+export ANTHROPIC_API_KEY=sk-ant-...     # optional — ccvm reads it from the environment
 
 # run it straight from GitHub, no install:
 cd ~/code/my-project
@@ -54,6 +54,11 @@ nix run github:jx-wi/ccvm
 # …or with arguments — everything after `ccvm` is forwarded to claude verbatim:
 nix run github:jx-wi/ccvm -- --model sonnet "summarise the build setup"
 ```
+
+**No API key?** That's fine — run `ccvm` without one and use Claude's in-VM `/login`
+(web auth): copy the printed URL into your browser, sign in, and paste the code back.
+Auto browser-open won't work from inside the VM, but the copy/paste flow does. Whatever
+you log in with lives only in the VM and is gone on exit.
 
 ### Install via home-manager
 
@@ -160,8 +165,6 @@ And the isolation, with `autoUpdateFiles = false` (default):
 - **x86_64-linux** is the primary, CI-built target; **aarch64-linux** is best-effort
   (evaluates and is wired up).
 - OAuth token refresh (`shareHostCredentials`) does not persist back to the host.
-- The guest uses the (upstream-deprecated) scripted initrd; a systemd-initrd switch is a
-  planned follow-up.
 
 ## License
 
