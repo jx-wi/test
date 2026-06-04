@@ -1,0 +1,43 @@
+# Hardened, single-purpose sshd. This is the (invisible) transport the host wrapper
+# uses to drop the user straight into Claude Code with a real PTY — chosen over a
+# serial/virtio console specifically because SSH propagates termios and SIGWINCH, so
+# resize / vim / less / full-screen TUIs behave exactly as on the host (design.md §3.3).
+#
+# Key-only, no passwords, no root, one ForceCommand. The host key and authorized_keys
+# come from the per-run seed (installed by ccvm-seed.service), so the client can pin the
+# ephemeral host identity with StrictHostKeyChecking=yes.
+{ config, lib, ... }:
+let
+  cfg = config.ccvm;
+in
+{
+  services.openssh = {
+    enable = true;
+    # Do not let NixOS generate persistent host keys: ccvm-seed.service installs the
+    # per-invocation key the wrapper pinned in its known_hosts.
+    hostKeys = [ ];
+    settings = {
+      PermitRootLogin = "no";
+      PasswordAuthentication = false;
+      KbdInteractiveAuthentication = false;
+      AuthenticationMethods = "publickey";
+      AuthorizedKeysFile = "/etc/ccvm/authorized_keys";
+      # Receive the Anthropic API key over the encrypted channel only (never argv/disk).
+      AcceptEnv = [ cfg.apiKeyVariable ];
+      X11Forwarding = false;
+      AllowTcpForwarding = false;
+      AllowAgentForwarding = false;
+    };
+    extraConfig = ''
+      HostKey /etc/ssh/ssh_host_ed25519_key
+      ForceCommand ${cfg.launcherPackage}/bin/ccvm-guest-launch
+    '';
+  };
+
+  # sshd must not start until the seed is mounted and the host key + authorized_keys
+  # are in place; otherwise the first connection races key installation.
+  systemd.services.sshd = {
+    after = [ "ccvm-seed.service" ];
+    requires = [ "ccvm-seed.service" ];
+  };
+}
