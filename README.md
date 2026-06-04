@@ -1,0 +1,168 @@
+# ccvm
+
+**Run Claude Code in a throw-away microVM, with zero setup.**
+
+`ccvm` boots an ephemeral QEMU virtual machine and drops you straight into the normal
+Claude Code TUI — same terminal, same keys, same everything — except the agent is now
+operating inside a disposable, RAM-only NixOS that **can't touch your real machine**.
+When you quit, the VM's memory is freed and nothing it did survives. There is no disk to
+clean up.
+
+It's the spiritual sibling of a disposable sandbox: `cd` into a project, type `ccvm`
+instead of `claude`, and work exactly as you would natively — but with a hard isolation
+boundary around the agent.
+
+```
+cd ~/code/my-project
+ccvm                      # ← instead of `claude`
+```
+
+---
+
+## Why
+
+`claude --dangerously-skip-permissions` is wonderfully fast and wonderfully dangerous: it
+lets the agent run anything against your actual filesystem. ccvm makes that safe by moving
+the agent into a VM:
+
+- **Your project is read-only by default.** The agent sees and edits a full working tree,
+  but every change lands in the VM's RAM and evaporates on exit. Export what you want with
+  `git push`. Flip one switch (`autoUpdateFiles = true`) to get live, native read-write.
+- **The rest of your machine is invisible.** Only the current directory is shared. No
+  `~/.ssh`, no `~/.aws`, no home directory.
+- **Your API key never hits disk.** It travels only inside the encrypted SSH channel —
+  never on the kernel cmdline, in a QEMU argument, or in any file.
+- **Nothing persists.** Crash, kill, `Ctrl-C`, dropped connection — all leave zero trace.
+
+Because the VM is the safety boundary, ccvm runs Claude with
+`--dangerously-skip-permissions` by default. That's the whole premise.
+
+---
+
+## Quick start
+
+Requires a Linux box with **Nix** and **flakes** enabled (KVM strongly recommended for
+speed; it falls back to slow software emulation otherwise).
+
+```sh
+export ANTHROPIC_API_KEY=sk-ant-...     # ccvm reads it from the environment
+
+# run it straight from GitHub, no install:
+cd ~/code/my-project
+nix run github:jx-wi/ccvm
+
+# …or with arguments — everything after `ccvm` is forwarded to claude verbatim:
+nix run github:jx-wi/ccvm -- --model sonnet "summarise the build setup"
+```
+
+### Install via home-manager
+
+```nix
+{
+  inputs.ccvm.url = "github:jx-wi/ccvm";
+
+  # in your home-manager configuration:
+  imports = [ inputs.ccvm.homeManagerModules.default ];
+
+  programs.ccvm = {
+    enable = true;
+    # autoUpdateFiles = true;            # opt into live host edits (see below)
+    # extraPackages = with pkgs; [ go gopls python3 ];  # project toolchains
+  };
+}
+```
+
+That puts a persistent `ccvm` command on your `PATH`.
+
+---
+
+## The one switch that matters: `autoUpdateFiles`
+
+| `autoUpdateFiles` | Host project | Edits | Use when |
+|---|---|---|---|
+| `false` *(default)* | **read-only** | land in VM RAM, vanish on exit | you want a hard safety net; export via `git push` |
+| `true` | **read-write** | land on the host **live** | you want native behaviour and trust the task |
+
+Per-invocation override without changing config: `CCVM_AUTOUPDATE=1 ccvm`.
+
+---
+
+## Options (`programs.ccvm.*`)
+
+| Option | Default | Meaning |
+|---|---|---|
+| `enable` | `false` | Install the `ccvm` command. |
+| `package` | `pkgs.claude-code` | The claude-code package to run in the VM. |
+| `autoUpdateFiles` | `false` | Read-write host project vs. ephemeral overlay (above). |
+| `memory` | `4096` | VM RAM, MiB. |
+| `cores` | `4` | VM vCPUs. |
+| `extraPackages` | `[ ]` | Extra tools inside the VM (a sensible base set is always present). |
+| `mountHostNixStore` | `false` | Share host `/nix/store` (ro) instead of a self-contained image — smaller/faster, less isolated. |
+| `dangerouslySkipPermissions` | `true` | Pass `--dangerously-skip-permissions` (the VM is the boundary). |
+| `apiKeyVariable` | `"ANTHROPIC_API_KEY"` | Host env var carrying the key; passed only via SSH `SendEnv`. |
+| `shareHostCredentials` | `false` | Mount `~/.claude` (ro) for OAuth instead of an API key (token refresh won't persist). |
+| `extraGuestModules` | `[ ]` | Extra NixOS modules merged into the guest (escape hatch). |
+
+### Runtime environment knobs
+
+| Var | Effect |
+|---|---|
+| `CCVM_AUTOUPDATE=1\|0` | Override the file-sharing mode for one run. |
+| `CCVM_SHELL=1` / `ccvm --shell` | Drop into a debug **zsh** in the guest instead of claude. |
+| `CCVM_DEBUG=1` / `ccvm --ccvm-debug` | Stream the guest console while booting; keep the scratch dir on exit. |
+| `CCVM_ACCEL=tcg` | Force software emulation (for hosts where `/dev/kvm` exists but is broken). |
+| `CCVM_MACHINE=q35` | Use the q35 machine type instead of the default `microvm`. |
+
+---
+
+## How it works (the short version)
+
+A Nix builder (`lib/mkccvm.nix`) evaluates a minimal NixOS guest and bakes its kernel,
+initrd, read-only squashfs store image, and kernel cmdline into a single Bash wrapper. At
+launch the wrapper generates throw-away SSH keys, writes a read-only "seed" the guest
+reads over 9p, boots QEMU headless, waits for sshd, and `ssh -tt`s into the guest in the
+foreground. SSH (not a serial console) is what gives you real-terminal fidelity — it
+carries `TERM`, the window size, and `SIGWINCH`, so resize, `vim`, `less` and vi-mode all
+behave natively. A single cleanup trap guarantees the VM and scratch dir are gone on every
+exit path.
+
+The full rationale — including the ephemeral root, the secret-handling path, and the
+"runtime-share trap" that shapes the build — is in [docs/design.md](docs/design.md).
+
+---
+
+## Verifying it yourself
+
+Most of ccvm's guarantees are checked automatically (mount isolation, the key never
+reaching disk/argv, verbatim argument forwarding, clean teardown). Terminal **fidelity**,
+however, is best confirmed by a human at a real terminal:
+
+```sh
+ccvm --shell        # debug shell in the guest
+```
+
+Then sanity-check, all of which should feel exactly like your host shell:
+
+- [ ] Resize the terminal window — the prompt reflows, `clear`/`Ctrl-L` works.
+- [ ] `vim somefile` — full-screen redraw, no corruption; `:q` returns cleanly.
+- [ ] `ls | less` — paging, search, resize while open.
+- [ ] zsh vi-mode: `Esc` then `k`/`j` to move through history, `cw` etc.
+- [ ] Colours and Unicode render correctly.
+
+And the isolation, with `autoUpdateFiles = false` (default):
+
+- [ ] Inside: `echo hi > scratch && ls`. Outside, on the host: the file is **not** there.
+
+---
+
+## Status & limitations
+
+- **x86_64-linux** is the primary, CI-built target; **aarch64-linux** is best-effort
+  (evaluates and is wired up).
+- OAuth token refresh (`shareHostCredentials`) does not persist back to the host.
+- The guest uses the (upstream-deprecated) scripted initrd; a systemd-initrd switch is a
+  planned follow-up.
+
+## License
+
+MIT © 2026 jx-wi. See [LICENSE](LICENSE).
