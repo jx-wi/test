@@ -34,8 +34,10 @@ the agent into a VM:
   never on the kernel cmdline, in a QEMU argument, or in any file.
 - **Nothing persists.** Crash, kill, `Ctrl-C`, dropped connection — all leave zero trace.
 
-Because the VM is the safety boundary, ccvm runs Claude with
-`--dangerously-skip-permissions` by default. That's the whole premise.
+Because the VM is the safety boundary, `--dangerously-skip-permissions` is safe to use
+here — but ccvm doesn't force it on you. It launches Claude with **no extra flags**; opt
+in yourself with `ccvm --dangerously-skip-permissions` (everything after `ccvm` is
+forwarded verbatim) when you want the agent to run unattended.
 
 ---
 
@@ -103,7 +105,6 @@ Per-invocation override without changing config: `CCVM_AUTOUPDATE=1 ccvm`.
 | `cores` | `4` | VM vCPUs. |
 | `extraPackages` | `[ ]` | Extra tools inside the VM (a sensible base set is always present). |
 | `mountHostNixStore` | `false` | Share host `/nix/store` (ro) instead of a self-contained image — smaller/faster, less isolated. |
-| `dangerouslySkipPermissions` | `true` | Pass `--dangerously-skip-permissions` (the VM is the boundary). |
 | `apiKeyVariable` | `"ANTHROPIC_API_KEY"` | Host env var carrying the key; passed only via SSH `SendEnv`. |
 | `shareHostCredentials` | `false` | Mount `~/.claude` (ro) for OAuth instead of an API key (token refresh won't persist). |
 | `extraGuestModules` | `[ ]` | Extra NixOS modules merged into the guest (escape hatch). |

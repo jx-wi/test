@@ -10,7 +10,7 @@ let
   ccvmPkg = (mkCcvm {
     inherit (cfg)
       package autoUpdateFiles memory cores extraPackages mountHostNixStore
-      dangerouslySkipPermissions apiKeyVariable shareHostCredentials extraGuestModules;
+      apiKeyVariable shareHostCredentials extraGuestModules;
   }).wrapper;
 in
 {
@@ -57,16 +57,6 @@ in
       type = lib.types.bool;
       default = false;
       description = "Share the host /nix/store read-only instead of building a self-contained image (smaller/faster, less isolated).";
-    };
-
-    dangerouslySkipPermissions = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-      description = ''
-        Run Claude Code with --dangerously-skip-permissions. Default true: the VM is the
-        safety boundary, which is the entire premise of ccvm. With autoUpdateFiles=false the
-        agent cannot touch the host at all; with true it is confined to the project directory.
-      '';
     };
 
     apiKeyVariable = lib.mkOption {

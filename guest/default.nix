@@ -24,11 +24,6 @@ in
       default = "ANTHROPIC_API_KEY";
       description = "Env var name carrying the Anthropic API key (sshd AcceptEnv).";
     };
-    dangerouslySkipPermissions = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-      description = "Append --dangerously-skip-permissions when launching claude.";
-    };
     claudePackage = lib.mkOption {
       type = lib.types.nullOr lib.types.package;
       default = pkgs.claude-code;

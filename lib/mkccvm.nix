@@ -20,7 +20,6 @@ let
     cores = 4;
     extraPackages = [ ];
     mountHostNixStore = false;
-    dangerouslySkipPermissions = true;
     apiKeyVariable = "ANTHROPIC_API_KEY";
     shareHostCredentials = false;
     extraGuestModules = [ ];
@@ -38,7 +37,7 @@ let
       {
         nixpkgs.pkgs = pkgs;
         ccvm = {
-          inherit (config) apiKeyVariable dangerouslySkipPermissions extraPackages
+          inherit (config) apiKeyVariable extraPackages
             shareHostCredentials mountHostNixStore;
           claudePackage = config.package;
         };

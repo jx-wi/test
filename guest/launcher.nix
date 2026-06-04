@@ -51,7 +51,10 @@ let
 
       # The API key arrived over the encrypted SSH channel (SendEnv -> AcceptEnv) and is
       # already in our environment here; it is never read from the seed or any file.
-      exec ${claudeBin} ${lib.optionalString cfg.dangerouslySkipPermissions "--dangerously-skip-permissions "}"''${args[@]}"
+      # No flags are injected — claude gets exactly the forwarded argv. The VM is the
+      # safety boundary, so --dangerously-skip-permissions is yours to opt into via
+      # `ccvm --dangerously-skip-permissions`, not something ccvm forces on you.
+      exec ${claudeBin} "''${args[@]}"
     '';
   };
 

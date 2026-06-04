@@ -20,8 +20,8 @@ This document explains *why* it is built the way it is. For how to use it, see t
    only cleanup. A crash, a kill, a dropped connection — all leave zero trace.
 3. **Secure by default.** The host project is *read-only* to the agent unless you opt
    in. The Anthropic API key never touches disk, argv or the kernel cmdline. The VM is
-   the trust boundary, which is what makes `--dangerously-skip-permissions` safe to
-   default to.
+   the trust boundary, which is what makes `--dangerously-skip-permissions` safe to opt
+   into — ccvm passes no flags of its own; you add that one yourself when you want it.
 4. **Zero host setup.** `nix run github:jx-wi/ccvm` from any flakes-enabled NixOS box,
    or add the home-manager module for a persistent `ccvm` command.
 
