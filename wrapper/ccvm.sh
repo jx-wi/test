@@ -216,9 +216,28 @@ WS_FSDEV="local,id=ws,path=$WORKDIR,security_model=none"
 CONFIG_ARGS=()
 if [[ $SHARECONFIG == 1 ]]; then
   if [[ -d "$HOME/.claude" ]]; then
-    CONFIG_ARGS+=(-fsdev "local,id=cfg,path=$HOME/.claude,security_model=none,readonly=on")
+    # Resolve the root so a home-manager-symlinked ~/.claude is exported as the real dir.
+    CFGPATH="$(readlink -f "$HOME/.claude")"
+    CONFIG_ARGS+=(-fsdev "local,id=cfg,path=$CFGPATH,security_model=none,readonly=on")
     CONFIG_ARGS+=(-device "virtio-9p-$BUS,fsdev=cfg,mount_tag=ccvm-config")
     printf '1' >"$SEED/share-config"
+
+    # home-manager (and other dotfile managers) populate ~/.claude with symlinks whose
+    # targets live OUTSIDE the tree — e.g. settings.json -> /nix/store/…-home-manager-files/…
+    # Those targets are absent from the guest, so the symlinks dangle on the read-only 9p
+    # mount and claude can't read its config. Stage the *dereferenced contents* of every
+    # escaping symlink into the seed; the guest lays them over the overlay so the config is
+    # actually readable. .credentials.json is never followed — the OAuth secret keeps riding
+    # the read-only 9p mount and is never copied into the seed (§3.7).
+    while IFS= read -r -d '' link; do
+      rel="${link#"$CFGPATH/"}"
+      [[ $rel == ".credentials.json" ]] && continue
+      tgt="$(readlink -f "$link" 2>/dev/null)" || continue
+      [[ -e $tgt && -r $tgt ]] || continue
+      case "$tgt/" in "$CFGPATH/"*) continue ;; esac # internal link: already resolves on 9p
+      mkdir -p "$SEED/config-deref/$(dirname "$rel")"
+      cp -rL "$link" "$SEED/config-deref/$rel"
+    done < <(find "$CFGPATH" -type l -print0 2>/dev/null)
   fi
   [[ -f "$HOME/.claude.json" ]] && cp "$HOME/.claude.json" "$SEED/claude-json"
 fi

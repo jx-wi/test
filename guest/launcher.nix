@@ -111,6 +111,20 @@ let
           mount -t overlay overlay \
             -o lowerdir=/run/ccvm-host-claude,upperdir=/run/ccvm-claude-upper,workdir=/run/ccvm-claude-work \
             /home/ccvm/.claude
+          # Lay the host-dereferenced config files (home-manager symlinks the wrapper
+          # resolved on the host) over the overlay. They land in the writable tmpfs upper,
+          # shadowing the now-dangling symlinks the 9p lower carries, so claude can actually
+          # read settings.json et al. Per-file chown (never `chown -R` the overlay root —
+          # that would copy every lower file up into the tmpfs). Best-effort: a hiccup here
+          # must not fail the oneshot and block sshd.
+          if [ -d "$seed/config-deref" ]; then
+            find "$seed/config-deref" -type f -print0 | while IFS= read -r -d "" f; do
+              rel="''${f#"$seed/config-deref/"}"
+              dst="/home/ccvm/.claude/$rel"
+              mkdir -p "$(dirname "$dst")" && rm -f "$dst" \
+                && cp "$f" "$dst" && chown ccvm:users "$dst"
+            done || true
+          fi
         fi
       fi
       # An `if` (not a trailing `[ -f … ] && …`): under `set -e` a bare conditional as the

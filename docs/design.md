@@ -176,6 +176,17 @@ scratch dir or the seed** — only the non-secret home-root `~/.claude.json` is 
 the seed and installed into the writable home. Claude's writes (including token refreshes)
 land in the tmpfs upper and do not persist back to the host.
 
+**home-manager symlinks.** A managed `~/.claude` typically has config files symlinked *out of
+the tree* — e.g. `settings.json -> /nix/store/…-home-manager-files/.claude/settings.json`. 9p
+passthrough preserves those symlinks verbatim, but their targets don't exist inside the guest,
+so they would dangle and claude would read no config. The wrapper therefore walks `~/.claude`
+and stages the **dereferenced contents** of every symlink whose target escapes the tree into
+`seed/config-deref`; the guest lays those real files over the overlay's writable upper,
+shadowing the dangling links. The walk **never follows `.credentials.json`** (it stays a 9p-only
+secret), and only escaping links are dereferenced — internal relative links already resolve on
+the mount. This is what makes a home-manager-managed config readable in the VM regardless of
+whether the host `/nix/store` is shared.
+
 A key is **not required**, though. With neither `ANTHROPIC_API_KEY` set nor
 `shareHostConfig` enabled, the wrapper warns (it no longer aborts) and starts claude
 unauthenticated, so the in-VM **`/login` web-auth flow** works: claude prints an
