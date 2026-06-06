@@ -27,11 +27,11 @@ half-remembered context.
 - **Branch `main`:** items #1, #3, #4, #6(partial), and **#2 (egress) all merged.** Tree clean.
   Merge history: `30ea263` (#3/#4/#6 + CCVM_MEMORY), `b461ca1` (egress merge, reconciling the
   conflicts from egress having forked before #3/#4/#6).
-- **`nix flake check` + `bash tests/boot.sh` were GREEN on the host** for the egress branch
-  pre-merge (boot.sh 7/7). **Re-verify both against merged `main`** — the guest now runs the
-  uid remap AND the egress firewall in one boot, a combination not yet booted together.
-- **Branch `egress-allowlist`:** fully merged into `main`; safe to delete
-  (`git branch -d egress-allowlist`) once the merged-main re-verification is green.
+- **Merged `main` is VERIFIED GREEN on the host** (2026-06-06): `nix flake check` clean (only
+  the known cosmetic warnings) and `bash tests/boot.sh` **9/9** — all four uid-remap assertions
+  AND both egress assertions pass in one boot, confirming the remap + firewall coexist.
+- **Branch `egress-allowlist`:** fully merged and re-verified; **safe to delete**
+  (`git branch -d egress-allowlist`).
 - **No git remote** is configured: every merge so far is local-only (see #5).
 - **`host.sh` on merged `main` = 18 assertions** (15 base + 2 uid/gid #4 + 1 egress
   default-open #2); `egress.sh` = 6. Both verified host-side via the dry-run recipe.
@@ -216,6 +216,11 @@ so far are local-only.
   `bash tests/boot.sh` 7/7 clean on the Nix+KVM box.
 - ⬜ Dedupe default values between `lib/mkccvm.nix` `defaults` and `modules/home-manager.nix`
   option defaults (two sources of truth for `memory`/`cores`/`shareHostConfig`/… → drift risk).
+- ⬜ **Add `meta` info to the flake.** `nix flake check` warns `app 'apps.x86_64-linux.ccvm'`
+  and `…default` "lacks attribute 'meta'". Add `meta` (description/license/maintainers/
+  mainProgram) to the flake's `packages`/`apps` outputs to silence it and make `nix run`/search
+  metadata correct. (Separate from the `homeManagerModules`/`ccvmParts` "unknown flake output"
+  warnings, which are pre-existing and cosmetic per CLAUDE.md.)
 
 ---
 
