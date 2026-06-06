@@ -24,6 +24,8 @@ MOUNTHOSTSTORE="@MOUNTHOSTSTORE@"
 HOSTSTOREPATH="@HOSTSTOREPATH@"
 MODE="@MODE@" # rw (autoUpdateFiles=true, default — mirrors native claude) | overlay (secure)
 MEMLOCK="@MEMLOCK@" # 1 = mlock guest RAM (lockGuestMemory) so it can't hit host swap; 0 = off
+EGRESSALLOW="@EGRESSALLOW@" # space-separated FQDN/IP/CIDR allowlist; empty = open egress (default)
+EGRESSPORTS="@EGRESSPORTS@" # space-separated dst ports the allowlist permits (default 443)
 
 # ---- helpers ---------------------------------------------------------------
 warn() { printf 'ccvm: %s\n' "$*" >&2; }
@@ -319,6 +321,51 @@ if [[ $SHARECONFIG == 1 ]]; then
     find "$SEED/config-deref" -name '.credentials.json' -delete 2>/dev/null || true
   fi
   [[ -f "$HOME/.claude.json" ]] && cp "$HOME/.claude.json" "$SEED/claude-json"
+fi
+
+# ---- egress allowlist (opt-in) --------------------------------------------
+# Empty baked list => open egress (the native default; no firewall, nothing written to the
+# seed). A non-empty list switches the guest to default-deny egress: we resolve any FQDNs
+# HERE (the host has working DNS) into IP rules, pass bare IPs/CIDRs through unchanged, and
+# hand the guest the resolved set + ports via the seed. api.anthropic.com is always included
+# so authentication never breaks even if the user forgot to list it.
+if [[ -n ${EGRESSALLOW// /} ]]; then
+  : >"$SEED/egress-allow"
+  # The "lock down" marker: present whenever the user opted in, independent of how many IPs
+  # actually resolved. The guest enforces the firewall on THIS file, not on a non-empty
+  # allow set, so an empty allow set fails CLOSED (deny-all) instead of silently reverting to
+  # open egress — the allowlist must never degrade into "no containment".
+  printf '1' >"$SEED/egress-enforce"
+  resolve_into_seed() {
+    local entry="$1" ip _
+    case "$entry" in
+      */* | *:*) printf '%s\n' "$entry" >>"$SEED/egress-allow" ;; # CIDR or IPv6 literal — verbatim
+      *[!0-9.]*)                                                   # has a non-IPv4 char => FQDN; resolve to A/AAAA
+        while read -r ip _; do
+          [[ -n $ip ]] && printf '%s\n' "$ip" >>"$SEED/egress-allow"
+        done < <(getent ahosts "$entry" 2>/dev/null)
+        ;;
+      *) printf '%s\n' "$entry" >>"$SEED/egress-allow" ;; # bare IPv4 — verbatim
+    esac
+  }
+  resolve_into_seed api.anthropic.com
+  # Explicit word-split of the space-separated allowlist into an array (keeps shellcheck
+  # happy — SC2086 — and makes the intent unambiguous).
+  read -ra _egress_entries <<<"$EGRESSALLOW"
+  for entry in "${_egress_entries[@]}"; do resolve_into_seed "$entry"; done
+  sort -u "$SEED/egress-allow" -o "$SEED/egress-allow"
+  # Fail closed, loudly, if the user opted in but NOTHING resolved (no literal IP/CIDR and
+  # total DNS failure — even api.anthropic.com). Booting on would either (a) leave egress
+  # open were the guest gating on a non-empty set, or (b) start a VM that can't reach the API
+  # anyway. Refuse with an actionable message instead. (The guest still fails closed via the
+  # enforce marker as defense in depth; this just turns a dead VM into a clear error.)
+  if [[ ! -s "$SEED/egress-allow" ]]; then
+    die "egressAllowlist is set but nothing resolved (host DNS down?) — refusing to boot rather than run with an unenforceable allowlist. Fix DNS, or add a literal IP/CIDR to the allowlist."
+  fi
+  # Ports as an nft-ready comma list (squeeze runs of spaces to single commas, trim edges).
+  ports_csv="$(printf '%s' "${EGRESSPORTS:-443}" | tr -s ' ' ',')"
+  ports_csv="${ports_csv#,}"
+  printf '%s' "${ports_csv%,}" >"$SEED/egress-ports"
 fi
 
 QEMU_ARGS=(

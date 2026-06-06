@@ -23,6 +23,13 @@ let
     apiKeyVariable = "ANTHROPIC_API_KEY";
     shareHostConfig = true;
     lockGuestMemory = false;
+    # Egress allowlist (opt-in). Empty list = open egress (the native default — npm/pip/git
+    # clone/WebFetch all work like native claude). A non-empty list switches the guest to a
+    # default-deny egress firewall that permits only these destinations (FQDNs are resolved
+    # host-side at launch; IPs/CIDRs pass through) plus DNS — api.anthropic.com is always
+    # auto-included so auth never breaks.
+    egressAllowlist = [ ];
+    egressPorts = [ 443 ];
     extraGuestModules = [ ];
   };
 in
@@ -73,7 +80,7 @@ let
 
   wrapper = pkgs.writeShellApplication {
     name = "ccvm";
-    runtimeInputs = with pkgs; [ qemu coreutils openssh findutils ];
+    runtimeInputs = with pkgs; [ qemu coreutils openssh findutils getent ];
     text = builtins.replaceStrings
       [
         "@KERNEL@"
@@ -90,6 +97,8 @@ let
         "@QEMU@"
         "@DEFAULTMACHINE@"
         "@MEMLOCK@"
+        "@EGRESSALLOW@"
+        "@EGRESSPORTS@"
       ]
       [
         kernel
@@ -106,6 +115,8 @@ let
         qemuBin
         defaultMachine
         (if config.lockGuestMemory then "1" else "0")
+        (lib.concatStringsSep " " config.egressAllowlist)
+        (lib.concatStringsSep " " (map toString config.egressPorts))
       ]
       (builtins.readFile ../wrapper/ccvm.sh);
   };

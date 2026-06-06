@@ -149,6 +149,13 @@ SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CONFIG=0 run)/seed"
 [[ "$(cat "$SEED/mode")" == rw ]] && ok "default mode is rw (native mirroring)" ||
   no "default mode not rw (got $(cat "$SEED/mode"))"
 
+# With no baked egress allowlist (this wrapper), egress stays OPEN: neither the allow set nor
+# the enforce marker is written, so the guest installs no OUTPUT filter (native default). The
+# marker is what the guest gates on, so its absence is the real "open egress" guarantee.
+[[ ! -e "$SEED/egress-allow" && ! -e "$SEED/egress-enforce" ]] &&
+  ok "default: open egress (no allowlist or enforce marker staged)" ||
+  no "egress firewall staged with an empty allowlist (allow=$([[ -e "$SEED/egress-allow" ]] && echo y || echo n) enforce=$([[ -e "$SEED/egress-enforce" ]] && echo y || echo n))"
+
 # ===========================================================================
 # 5. CCVM_MEMORY override: a positive integer is accepted, anything else rejected
 #    before boot (so a typo can't silently fall back to the baked default).

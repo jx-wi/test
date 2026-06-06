@@ -16,7 +16,20 @@ fi
 # Report host-config visibility (only present when shareHostConfig is on and the host has it).
 [ -r "$HOME/.claude/settings.json" ] && echo "CONFIG:settings-readable"
 [ -e "$HOME/.claude/.credentials.json" ] && echo "CONFIG:credential-present"
-# Exit cleanly: the diagnostic tests above must not leak a non-zero status to the wrapper
-# (which propagates the remote exit code) — that would look like a boot/session failure when
-# the run was fine. The real claude returns 0 on a normal exit; mirror that.
+# Egress probes (best-effort, short timeout). With open egress both reach; with the
+# example.com allowlist only the allowed host reaches and the other is blocked. boot.sh
+# asserts on these only in the egress scenario.
+probe() { # $1=url $2=label
+  if curl -sS --max-time 8 -o /dev/null "$1" 2>/dev/null; then
+    echo "EGRESS:$2:reachable"
+  else
+    echo "EGRESS:$2:blocked"
+  fi
+}
+probe https://example.com/ allowed
+probe https://1.1.1.1/ denied
+
+# Exit cleanly: the diagnostic probes/tests above must not leak a non-zero status to the
+# wrapper (which propagates the remote exit code) — that would look like a boot/session
+# failure when the run was fine. The real claude returns 0 on a normal exit; mirror that.
 exit 0

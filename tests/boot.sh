@@ -21,8 +21,9 @@ export CCVM_MACHINE="${CCVM_MACHINE:-q35}"
 # Don't drag the host's real ~/.claude into the boot test; we assert on files, not config.
 export CCVM_SHARE_CONFIG="${CCVM_SHARE_CONFIG:-0}"
 
-echo "building stub-claude ccvm wrapper (builds the guest closure; first run is slow)…" >&2
-WRAP="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix)/bin/ccvm"
+echo "building stub-claude ccvm wrappers (builds the guest closure; first run is slow)…" >&2
+WRAP="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix open)/bin/ccvm"
+WRAP_EGRESS="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix egress)/bin/ccvm"
 
 PASS=0
 FAIL=0
@@ -41,13 +42,13 @@ no() {
 # failed", console/qemu tail) prints to stderr, and silently swallowing it under `set -e`
 # turns a real failure into an invisible non-zero exit. So tee stderr to a log and, if the
 # wrapper exits non-zero, surface it here instead of letting the script die mute.
-run_capture() { # $1=project dir, rest=ccvm args; prints cleaned guest stdout
-  local proj="$1" out errlog rc=0
-  shift
+run_capture() { # $1=wrapper, $2=project dir, rest=ccvm args; prints cleaned guest stdout
+  local wrap="$1" proj="$2" out errlog rc=0
+  shift 2
   errlog="$(mktemp)"
   # `|| rc=$?` captures the wrapper's true exit code (an `if !` test would reset $? to 0)
   # and keeps `set -e` from killing us, so a boot failure surfaces instead of dying mute.
-  out="$( (cd "$proj" && "$WRAP" "$@") 2>"$errlog" )" || rc=$?
+  out="$( (cd "$proj" && "$wrap" "$@") 2>"$errlog" )" || rc=$?
   if ((rc != 0)); then
     {
       printf '\n!! ccvm exited %d — wrapper stderr follows (likely a boot failure):\n' "$rc"
@@ -61,7 +62,7 @@ run_capture() { # $1=project dir, rest=ccvm args; prints cleaned guest stdout
 
 # ---- rw (default): a guest write lands on the host -------------------------
 PROJ_RW="$(mktemp -d)"
-OUT="$(run_capture "$PROJ_RW" hello 'two words')"
+OUT="$(run_capture "$WRAP" "$PROJ_RW" hello 'two words')"
 grep -qa 'CCVM_BOOT_MARKER' <<<"$OUT" &&
   ok "stub claude launched inside the guest" || no "claude did not launch"
 grep -qa '^ARGV:hello two words$' <<<"$OUT" &&
@@ -82,13 +83,26 @@ rm -rf "$PROJ_RW"
 
 # ---- overlay (--no-auto-update-files): the write stays in the VM -----------
 PROJ_RO="$(mktemp -d)"
-OUT="$(run_capture "$PROJ_RO" --no-auto-update-files hi)"
+OUT="$(run_capture "$WRAP" "$PROJ_RO" --no-auto-update-files hi)"
 grep -qa 'WRITE:ok' <<<"$OUT" &&
   ok "overlay mode: guest writes its tmpfs upper" || no "overlay: guest write failed"
 [ ! -e "$PROJ_RO/ccvm-boot-write" ] &&
   ok "overlay mode: host project untouched (edit stayed ephemeral)" ||
   no "overlay mode: host file LEAKED — isolation broken"
 rm -rf "$PROJ_RO"
+
+# ---- egress allowlist: only the allowlisted host is reachable --------------
+# Needs outbound internet. The egress wrapper allowlists example.com (api.anthropic.com is
+# auto-included); the stub probes example.com (must reach) and 1.1.1.1 (must be blocked).
+PROJ_EG="$(mktemp -d)"
+OUT="$(run_capture "$WRAP_EGRESS" "$PROJ_EG")"
+grep -qa '^EGRESS:allowed:reachable$' <<<"$OUT" &&
+  ok "egress allowlist: allowlisted host reachable" ||
+  no "egress: allowlisted host unreachable (allowlist too strict?): $(grep -a '^EGRESS:' <<<"$OUT")"
+grep -qa '^EGRESS:denied:blocked$' <<<"$OUT" &&
+  ok "egress allowlist: non-allowlisted host blocked" ||
+  no "egress: non-allowlisted host NOT blocked — exfil channel open: $(grep -a '^EGRESS:' <<<"$OUT")"
+rm -rf "$PROJ_EG"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

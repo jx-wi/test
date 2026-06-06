@@ -10,7 +10,8 @@ let
   ccvmPkg = (mkCcvm {
     inherit (cfg)
       package autoUpdateFiles memory cores extraPackages mountHostNixStore
-      apiKeyVariable shareHostConfig lockGuestMemory extraGuestModules;
+      apiKeyVariable shareHostConfig lockGuestMemory egressAllowlist egressPorts
+      extraGuestModules;
   }).wrapper;
 in
 {
@@ -94,6 +95,27 @@ in
         Off by default; requires a large enough RLIMIT_MEMLOCK or QEMU will not start.
         Per-run override: CCVM_MLOCK=0|1.
       '';
+    };
+
+    egressAllowlist = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = lib.literalExpression ''[ "github.com" "registry.npmjs.org" "10.0.0.0/8" ]'';
+      description = ''
+        Opt-in network egress allowlist. Empty (default) keeps egress fully OPEN, so the
+        agent reaches anything like native `claude` (this is the deliberate native-mirroring
+        default). A non-empty list switches the guest to a DEFAULT-DENY egress firewall that
+        permits only these destinations on `egressPorts`, plus DNS — closing the
+        prompt-injection exfiltration channel. Entries may be FQDNs (resolved on the host at
+        launch into IP rules; reliable for a session but IP-pins CDN-fronted hosts),
+        bare IPs, or CIDRs. `api.anthropic.com` is always auto-included so auth never breaks.
+      '';
+    };
+
+    egressPorts = lib.mkOption {
+      type = lib.types.listOf lib.types.port;
+      default = [ 443 ];
+      description = "Destination ports the egress allowlist permits (only used when egressAllowlist is non-empty). Add 80 for plain-HTTP mirrors/redirects.";
     };
 
     extraGuestModules = lib.mkOption {
