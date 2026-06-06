@@ -317,6 +317,55 @@ who wants anonymity runs Tor or a VPN on the host and the guest rides through it
 with no guest-side code. Egress *control* (where the agent may connect) belongs in ccvm;
 egress *anonymization* (how those packets reach the wire) belongs on the host.
 
+### 3.11 Encrypted ephemeral scratch disk (design only — not implemented)
+
+> **Status: design only.** Nothing below is built yet. It is captured here so the approach —
+> and the reasons for its specific choices — survive. It needs `cryptsetup` in the guest +
+> initrd and is unbuildable/untestable without a Nix+KVM box.
+
+**The problem the RAM-only model can't solve.** ccvm's root is tmpfs and `/nix/store` is a
+read-only squashfs (§3.4). That is the right default — wipe-on-exit is a property of *physics*,
+not of a cleanup routine — but it breaks for large **writable** data: `nix develop` realising a
+multi-GB closure, a big `node_modules`/`target`/`.venv`, hefty build outputs. tmpfs is backed by
+RAM, so at `memory=4096` a large write OOMs the guest; and you cannot `nix build`/`nix develop`
+into `/nix/store` at all because it is read-only. The workspace 9p share helps for *project*
+files, but not for a writable store or scratch that must not consume RAM.
+
+**The plan (keeps wipe-on-exit, cryptographically).**
+
+- The **host** attaches a raw **sparse** image as a `virtio-blk` device, created in a
+  **disk-backed** `scratchDir` — explicitly *not* `XDG_RUNTIME_DIR`, which is usually tmpfs and
+  would defeat the whole point by putting the "disk" back in RAM. A `diskSize` cap bounds it;
+  sparse means it only consumes what is actually written.
+- The **guest** generates a LUKS key from `/dev/urandom` and `cryptsetup luksFormat`s the device
+  **fresh every boot**. The key is generated *in the guest* and **never crosses 9p** — the host
+  only ever sees ciphertext. This is strictly stronger than passing a key through the seed, and
+  it mirrors the existing invariant that the API key lives only in guest RAM (§3.7).
+- The decrypted device is mounted either as a generic encrypted scratch, or as the encrypted
+  overlay **upper** over the read-only squashfs `/nix/store` — giving a writable store backed by
+  disk instead of RAM.
+
+**Why FDE rather than a plain ephemeral disk.** Wipe-on-exit must survive a crash that skips the
+cleanup trap, and on modern storage *plain deletion is not erasure*: SSD TRIM is asynchronous,
+and CoW filesystems/snapshots can retain freed blocks. With FDE the key dies with guest RAM at
+power-off, so the on-disk image is inert ciphertext the instant the VM stops — even if the trap
+never runs. The trap still `rm`s the image as belt-and-suspenders, but the security guarantee
+rests on the key being gone, not on the delete succeeding.
+
+**Open decisions.**
+
+- **Scope:** writable encrypted `/nix/store` **plus enabling `nix` in the guest** (the guest
+  currently sets `nix.enable = false`) for true in-VM `nix develop` — versus a generic encrypted
+  scratch only, leaving the store read-only. The former is more capable but more surface.
+- **Default:** off. Pure-RAM stays the default so boot stays fast and the no-disk invariant
+  holds unless explicitly opted into — e.g. `storeDisk = "16G"`.
+
+**Relationship to `mountHostNixStore`.** These are complementary, not competing. If the multi-GB
+closure is *already realised in the host store*, `mountHostNixStore = true` exposes it read-only
+at zero RAM cost and needs no disk at all. The encrypted scratch disk is specifically for when
+the guest must **write** a large closure (or other large data) ephemerally and would otherwise
+exhaust RAM.
+
 ---
 
 ## 4. Boot & connect flow (wrapper)

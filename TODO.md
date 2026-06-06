@@ -337,8 +337,11 @@ closure, large `node_modules`/`target`/`.venv`, build outputs. tmpfs OOMs at `me
 `mountHostNixStore = true` exposes it read-only at zero RAM cost — no new disk needed. The
 encrypted disk is specifically for when the guest must **write** a large closure ephemerally.
 
-**Status:** design only. Needs `cryptsetup` in the guest + initrd; unbuildable/untestable without
-Nix+KVM. To be captured as a `design.md` §3.x section.
+**Status:** design only — **captured as `docs/design.md` §3.11** (2026-06-06). Needs `cryptsetup`
+in the guest + initrd; unbuildable/untestable without Nix+KVM. No code yet; the §3.11 writeup
+records the sparse-disk-backed `scratchDir` (not tmpfs), guest-generated LUKS key that never
+crosses 9p, fresh `luksFormat` per boot, the FDE-as-wipe rationale, and the two open decisions
+(scope: writable store + guest `nix` vs. generic scratch; default off via `storeDisk`).
 
 ---
 
