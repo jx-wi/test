@@ -107,7 +107,7 @@ Those `ccvm` flags are intercepted by the wrapper and are **not** forwarded to c
 | `enable` | `false` | Install the `ccvm` command. |
 | `package` | `pkgs.claude-code` | The claude-code package to run in the VM. |
 | `autoUpdateFiles` | `true` | Read-write host project (live, like native `claude`) vs. ephemeral overlay (above). |
-| `memory` | `4096` | VM RAM, MiB. |
+| `memory` | `4096` | VM RAM, MiB. Per-run override: `CCVM_MEMORY=<MiB>` (e.g. for heavy `nix develop` closures). |
 | `cores` | `4` | VM vCPUs. |
 | `extraPackages` | `[ ]` | Extra tools inside the VM (a sensible base set is always present). |
 | `mountHostNixStore` | `false` | Share host `/nix/store` (ro) instead of a self-contained image — smaller/faster, less isolated. |
@@ -124,6 +124,7 @@ Those `ccvm` flags are intercepted by the wrapper and are **not** forwarded to c
 | `CCVM_AUTOUPDATE=1\|0` | Override the file-sharing mode for one run. |
 | `CCVM_SHARE_CONFIG=1\|0` | Override host `~/.claude` sharing for one run (wins over the baked `shareHostConfig`). |
 | `CCVM_MLOCK=1\|0` | Lock (or unlock) the guest RAM for one run (overrides the baked `lockGuestMemory`). |
+| `CCVM_MEMORY=<MiB>` | Override the guest RAM (MiB) for one run, no rebuild — e.g. `CCVM_MEMORY=16384` for a big dependency closure. |
 | `CCVM_SHELL=1` / `ccvm --shell` | Drop into a debug **zsh** in the guest instead of claude. |
 | `CCVM_DEBUG=1` / `ccvm --ccvm-debug` | Stream the guest console while booting; keep the scratch dir on exit. |
 | `CCVM_ACCEL=tcg` | Force software emulation (for hosts where `/dev/kvm` exists but is broken). |

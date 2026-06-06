@@ -81,8 +81,13 @@ pick_port() {
 # Wait until the guest sshd answers with its banner. We probe the raw port (not a full
 # ssh session) because the sshd ForceCommand would otherwise launch claude on every probe.
 wait_for_boot() {
-  local _ banner
-  for _ in $(seq 1 120); do
+  # Cold TCG (software emulation) boots are far slower than KVM and vary with host load, so
+  # a ~36s cap (120 × 0.3s) produces spurious "boot failed" under tcg (the box may still be
+  # booting). Give TCG a much longer budget; KVM keeps the snappy cap. CCVM_BOOT_TRIES
+  # overrides for pathological cases. Each try is ~0.3s sleep + connect/read overhead.
+  local _ banner tries="${CCVM_BOOT_TRIES:-120}"
+  [[ -z ${CCVM_BOOT_TRIES:-} && ${ACCEL:-} == tcg ]] && tries=600
+  for _ in $(seq 1 "$tries"); do
     kill -0 "$QEMU_PID" 2>/dev/null || return 1
     # Brace group, not a bare `exec … 2>/dev/null`: the connect is attempted before a
     # trailing redirect applies, leaking "Connection refused" to the terminal on every
@@ -146,6 +151,18 @@ case "${CCVM_MLOCK:-}" in
   1 | true | yes) MEMLOCK=1 ;;
   0 | false | no) MEMLOCK=0 ;;
 esac
+
+# Guest RAM precedence: CCVM_MEMORY (MiB) overrides the baked `memory` default for one run.
+# Memory is a runtime QEMU arg (no rebuild), so a heavy project can ask for more without
+# touching config: CCVM_MEMORY=16384 ccvm … . Resolved before the mlock preflight, which
+# sizes its RLIMIT_MEMLOCK check against MEMORY.
+if [[ -n ${CCVM_MEMORY:-} ]]; then
+  if [[ $CCVM_MEMORY =~ ^[1-9][0-9]*$ ]]; then
+    MEMORY="$CCVM_MEMORY"
+  else
+    die "CCVM_MEMORY must be a positive integer (MiB); got '$CCVM_MEMORY'"
+  fi
+fi
 
 # ---- preflight -------------------------------------------------------------
 WORKDIR="$PWD"
@@ -221,6 +238,12 @@ cp "$TMP/hostkey.pub" "$SEED/ssh_host_ed25519_key.pub"
 printf '%s' "$WORKDIR" >"$SEED/workdir"
 printf '%s' "$MODE" >"$SEED/mode"
 printf '%s' "$SHELL_MODE" >"$SEED/shell"
+# Host user identity. The guest remaps its agent user (ccvm) to these so 9p passthrough
+# (security_model=none) yields correct workspace ownership in rw mode: a host uid != 1000
+# would otherwise see the project owned by a foreign uid (agent can't write its own files)
+# and create files owned by 1000 on the host. Non-secret integers — never the API key.
+printf '%s' "$(id -u)" >"$SEED/host-uid"
+printf '%s' "$(id -g)" >"$SEED/host-gid"
 # Forwarded argv, NUL-separated so spaces/quotes/globs survive (reconstructed in the
 # guest with `mapfile -d ''`). Never reassembled by string-splitting.
 if ((${#FWD[@]})); then

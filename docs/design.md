@@ -141,7 +141,14 @@ guest, so any path the agent prints or writes matches the host's mental model.
 - **`autoUpdateFiles = true` (default): read-write passthrough.** The host CWD is mounted
   read-write; edits land on the host live — identical to running `claude` natively. With
   `security_model=none`, files are created with real host uid/gid (no `.virtfs_metadata`
-  litter), because the guest `ccvm` user is uid 1000 to match a typical host user. This
+  litter). The guest `ccvm` user is baked at uid 1000, but 9p passthrough is numeric, so a
+  host user whose uid ≠ 1000 would otherwise see the project owned by a foreign uid (the
+  agent couldn't write its own files) and create host files owned by 1000. To stay native
+  for *any* host uid, the wrapper writes the host `id -u`/`id -g` into the read-only seed
+  (non-secret integers, never the API key) and the guest `ccvm-seed.service` remaps its
+  agent user/group to match **before sshd starts** — so the login session and every file
+  the agent creates carry the correct host ownership. The remap is best-effort and
+  fail-open: a missing/garbage/root id leaves uid 1000 rather than blocking boot. This
   mirrors native `claude`, which is why it is the default.
 - **`autoUpdateFiles = false`: overlay (the safety net).** The host tree is the
   read-only **lower** of an overlayfs; a tmpfs is the **upper**. The agent sees and edits

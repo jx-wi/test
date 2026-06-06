@@ -36,11 +36,27 @@ no() {
 }
 
 # ssh -tt gives the guest a PTY, so captured output carries \r — strip it before matching
-# (CLAUDE.md gotcha: otherwise grep silently misses).
+# (CLAUDE.md gotcha: otherwise grep silently misses). We must capture the wrapper's stdout
+# (the guest output we assert on) WITHOUT discarding its stderr: a boot failure ("boot
+# failed", console/qemu tail) prints to stderr, and silently swallowing it under `set -e`
+# turns a real failure into an invisible non-zero exit. So tee stderr to a log and, if the
+# wrapper exits non-zero, surface it here instead of letting the script die mute.
 run_capture() { # $1=project dir, rest=ccvm args; prints cleaned guest stdout
-  local proj="$1"
+  local proj="$1" out errlog rc=0
   shift
-  (cd "$proj" && "$WRAP" "$@") 2>/dev/null | tr -d '\r'
+  errlog="$(mktemp)"
+  # `|| rc=$?` captures the wrapper's true exit code (an `if !` test would reset $? to 0)
+  # and keeps `set -e` from killing us, so a boot failure surfaces instead of dying mute.
+  out="$( (cd "$proj" && "$WRAP" "$@") 2>"$errlog" )" || rc=$?
+  if ((rc != 0)); then
+    {
+      printf '\n!! ccvm exited %d — wrapper stderr follows (likely a boot failure):\n' "$rc"
+      sed 's/^/    /' "$errlog"
+      printf '   (under TCG this is often the boot timeout — see CCVM_BOOT_TRIES)\n\n'
+    } >&2
+  fi
+  rm -f "$errlog"
+  printf '%s' "$out" | tr -d '\r'
 }
 
 # ---- rw (default): a guest write lands on the host -------------------------
@@ -52,6 +68,16 @@ grep -qa '^ARGV:hello two words$' <<<"$OUT" &&
   ok "argv forwarded verbatim to claude" || no "argv wrong: $(grep -a '^ARGV:' <<<"$OUT")"
 [ -f "$PROJ_RW/ccvm-boot-write" ] &&
   ok "rw mode: guest edit landed on the host project" || no "rw mode: host file missing"
+# uid remap: the agent runs as the host uid (not the baked 1000), and the file it wrote
+# on the host is owned by the host user — the whole point of #4 (correct for any host uid).
+grep -qa "^UID:$(id -u)$" <<<"$OUT" &&
+  ok "guest agent uid remapped to the host uid" ||
+  no "guest uid not remapped: $(grep -a '^UID:' <<<"$OUT") (host $(id -u))"
+if [ -f "$PROJ_RW/ccvm-boot-write" ]; then
+  [ "$(stat -c %u "$PROJ_RW/ccvm-boot-write")" = "$(id -u)" ] &&
+    ok "rw mode: host file owned by the host user (correct ownership)" ||
+    no "rw mode: host file owned by uid $(stat -c %u "$PROJ_RW/ccvm-boot-write"), want $(id -u)"
+fi
 rm -rf "$PROJ_RW"
 
 # ---- overlay (--no-auto-update-files): the write stays in the VM -----------

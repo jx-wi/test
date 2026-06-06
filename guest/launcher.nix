@@ -60,7 +60,7 @@ let
 
   seedSetup = pkgs.writeShellApplication {
     name = "ccvm-seed-setup";
-    runtimeInputs = [ pkgs.coreutils pkgs.util-linux ];
+    runtimeInputs = [ pkgs.coreutils pkgs.util-linux pkgs.shadow pkgs.gnugrep ];
     text = ''
       seed=/run/ccvm-seed
       mkdir -p "$seed"
@@ -78,6 +78,30 @@ let
       install -D -m 600 "$seed/ssh_host_ed25519_key"     /etc/ssh/ssh_host_ed25519_key
       install -D -m 644 "$seed/ssh_host_ed25519_key.pub" /etc/ssh/ssh_host_ed25519_key.pub
       install -D -m 644 -o root -g root "$seed/authorized_keys" /etc/ccvm/authorized_keys
+
+      # Match the agent user (ccvm, baked uid 1000) to the *host* user's uid/gid so 9p
+      # passthrough (security_model=none) gives correct ownership in rw mode. Without this a
+      # host user whose uid != 1000 sees the workspace owned by a foreign uid — the agent
+      # can't write its own project, and files it creates land on the host owned by 1000.
+      # The ids are non-secret integers from the read-only seed (the wrapper wrote `id -u`/
+      # `id -g`). Done BEFORE the workspace/config setup and Before=sshd, so every later
+      # `chown ccvm`/`-o ccvm` and the login session pick up the remapped ids. Best-effort
+      # and fail-open: a hiccup must NOT fail the oneshot and block sshd — we keep uid 1000.
+      # usermod is safe here (no ccvm process exists yet; sshd hasn't started). `-o` permits
+      # a non-unique id (this ephemeral guest has no conflicting accounts to protect).
+      host_uid="$(cat "$seed/host-uid" 2>/dev/null || true)"
+      host_gid="$(cat "$seed/host-gid" 2>/dev/null || true)"
+      if printf '%s' "$host_uid" | grep -qxE '[0-9]+' && [ "$host_uid" != 0 ]; then
+        if printf '%s' "$host_gid" | grep -qxE '[0-9]+' && [ "$host_gid" != 0 ] \
+           && [ "$host_gid" != "$(id -g ccvm)" ]; then
+          groupmod -o -g "$host_gid" users || true
+        fi
+        if [ "$host_uid" != "$(id -u ccvm)" ]; then
+          usermod -o -u "$host_uid" ccvm || true
+          # systemd-tmpfiles created /home/ccvm as the old uid; re-own it (small tmpfs home).
+          chown -R "$host_uid:$(id -g ccvm)" /home/ccvm || true
+        fi
+      fi
 
       workdir="$(cat "$seed/workdir")"
       mode="$(cat "$seed/mode")"
