@@ -172,8 +172,8 @@ fi
 
 # mlock preflight: QEMU started with mem-lock=on aborts if it cannot lock the guest RAM, so
 # surface a clear, loud hint early instead of a cryptic qemu failure when RLIMIT_MEMLOCK is
-# too low. The required lock is the guest RAM plus QEMU's own overhead, so even memlock ==
-# MEMORY is borderline; warn at any limit that is not comfortably above the guest size.
+# too low. The required lock is the guest RAM plus QEMU's own overhead; we warn when the
+# limit is below the guest size (a limit at or just above it can still be borderline).
 if [[ $MEMLOCK == 1 ]]; then
   memlock_kib="$(ulimit -l)"
   if [[ $memlock_kib != unlimited ]] && ((memlock_kib < MEMORY * 1024)); then
