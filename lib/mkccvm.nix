@@ -68,8 +68,8 @@ let
   # wrapper stages nothing (injection disabled).
   claudeMdFile = if config.extraClaudeMd == "" then "" else "${pkgs.writeText "ccvm-context.md" config.extraClaudeMd}";
 
-  # ccvm's own version. Pre-public (no tagged release / git remote yet — TODO #5), surfaced by
-  # `ccvm --ccvm-version` (baked into the wrapper as @VERSION@). Bump on release.
+  # ccvm's own version. Pre-public (no tagged release yet), surfaced by `ccvm --ccvm-version`
+  # (baked into the wrapper as @VERSION@). Bump on release.
   version = "0.1.0";
 
   # Package metadata. Surfaced on the wrapper derivation (so `nix search` / `nix run` see a

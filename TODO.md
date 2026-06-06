@@ -24,8 +24,9 @@ half-remembered context.
 
 ## Current state (keep this updated)
 
-- **Branch `main` only** (no git remote — every commit is local; see #5). Done & committed:
-  **#1, #2, #3, #4, #6, #7, #8, #9, #10, #11, #12.** Recent commits (newest first):
+- **Branch `main` only** (no git remote yet — every commit is local; the user adds the remote
+  on the host when ready, see #5). Done & committed:
+  **#1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12.** Recent commits (newest first):
   - `decad40` #11/#12 persistClaudeProjects (resume + memory persist; **committed** — was the
     last uncommitted item)
   - `c833b47` #8 extraClaudeMd (ccvm-context staged as the guest's `~/.claude/CLAUDE.md`)
@@ -49,8 +50,8 @@ half-remembered context.
   `@VERSION@` #6). The token list and value list in BOTH `lib/mkccvm.nix` and
   `tests/default.nix` must stay balanced at 20 — verify with the awk one-liners (a mismatch
   silently mis-bakes the wrapper).
-- **#5 placeholder half resolved:** `jx-wi` is the user's real GitHub handle — no substitution
-  needed; repo will live at `github.com/jx-wi/ccvm`. The git REMOTE is still unconfigured.
+- **#5 resolved:** `jx-wi` is the user's real GitHub handle (no substitution was ever needed);
+  repo will live at `github.com/jx-wi/ccvm`. The git remote is the user's to add on the host.
 - **RENAME (done, `c0c5e97`):** `shareHostConfig` → `shareClaudeConfig` everywhere (option, env
   `CCVM_SHARE_CLAUDE_CONFIG`, token `@SHARECLAUDE@`, seed marker `share-claude-config`). That is
   why #3 below reads as "dead `shareClaudeConfig` guest option" — it was `shareHostConfig` then.
@@ -210,12 +211,14 @@ exercise it for real, run `bash tests/boot.sh` as a host user whose uid ≠ 1000
 
 ---
 
-## 5. ⬜ Replace `jx-wi` placeholders — MEDIUM
+## 5. ✅ `jx-wi` identity + git remote — DONE (nothing to do in-repo)
 
-`jx-wi` appears in `flake.nix`, `README.md` (×4), `LICENSE`. Confirm the real GitHub
-org/identity before anyone `nix run github:jx-wi/ccvm` (currently a dead URL). Also unblocks
-adding a real **git remote** + PR flow — there is **no remote configured** today, so all merges
-so far are local-only.
+`jx-wi` is the user's real GitHub handle, so the references in `flake.nix`, `README.md`,
+`LICENSE` are already correct — there were never placeholders to substitute. The only
+remaining step is adding the remote, which the **user will do on the host when ready**:
+`git remote add origin git@github.com:jx-wi/ccvm.git && git push -u origin main`. (SSH push
+works from the host's `~/.ssh`; from inside ccvm it deliberately can't authenticate — see #7.)
+No code change needed here.
 
 ---
 
@@ -469,10 +472,10 @@ project's slug instead of all of `projects/` if exposing all history to in-VM wr
 ### Cross-cutting notes
 
 - **No git remote yet** (#5): every commit is local-only; `main` is the only branch (the
-  `egress-allowlist` branch was merged and deleted).
-- **Everything through #12 is committed; #6 is now fully done (4/4).** Open work items left:
-  **#5** (jx-wi/remote — mostly your action), **#7 push/export HTTPS doc** (LOW), **#10 FDE**
-  (design only). Nothing is mid-flight on the working tree.
+  `egress-allowlist` branch was merged and deleted). The user adds the remote on the host.
+- **Everything through #12 is committed; #5 and #6 are now done.** Open work items left:
+  **#7 push/export HTTPS doc** (LOW) and **#10 FDE** (design only). Nothing is mid-flight on
+  the working tree.
 - **Commit trailer:** `Co-authored-by: Claude <noreply@anthropic.com>` (exact form; see CLAUDE.md).
 - **Recently done, not a blocker:** `CCVM_MEMORY=<MiB>` per-run guest-RAM override (wrapper + docs
   + `host.sh` tests). The `memory` home-manager option already existed (default 4096); the new bit
