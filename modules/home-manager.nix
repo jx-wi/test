@@ -14,7 +14,7 @@ let
     inherit (cfg)
       package autoUpdateFiles memory cores extraPackages mountHostNixStore
       apiKeyVariable shareClaudeConfig persistClaudeProjects shareGitConfig extraClaudeMd
-      lockGuestMemory storeDisk egressAllowlist egressPorts extraGuestModules;
+      lockGuestMemory vmDiskSize egressAllowlist egressPorts extraGuestModules;
   }).wrapper;
 in
 {
@@ -139,22 +139,24 @@ in
       '';
     };
 
-    storeDisk = lib.mkOption {
-      type = lib.types.str;
-      default = defaults.storeDisk;
-      example = "16G";
+    vmDiskSize = lib.mkOption {
+      type = lib.types.ints.unsigned;
+      default = defaults.vmDiskSize;
+      example = 32;
       description = ''
-        Opt-in encrypted ephemeral scratch disk. Empty (default) keeps the pure-RAM model. A
-        size string (e.g. "16G", "512M") attaches a raw SPARSE virtio-blk image — created in a
-        disk-backed dir on the host, NOT tmpfs — which the guest LUKS-encrypts with a key it
-        generates in its own RAM (the key never crosses 9p; the host only ever sees ciphertext)
-        and mounts at /scratch for large writable data that would otherwise exhaust the
-        RAM-backed tmpfs (big build outputs, node_modules/target/.venv, caches). Wiped on exit:
-        the key dies with guest RAM (leaving inert ciphertext) and the host image is removed.
-        The host scratch dir is ''${XDG_CACHE_HOME:-~/.cache}/ccvm by default (override with
-        CCVM_SCRATCH_DIR); ccvm refuses a tmpfs target unless CCVM_SCRATCH_ALLOW_TMPFS=1.
-        Per-run override: CCVM_STORE_DISK=<size>|0. (Phase 1: generic /scratch. A future
-        storeDiskMode would also back a writable /nix/store — see design §3.11.)
+        Opt-in encrypted ephemeral disk, in GiB. 0 (default) keeps the pure-RAM model; a positive
+        size (e.g. 32) attaches a raw SPARSE virtio-blk image — created in a disk-backed dir on the
+        host, NOT tmpfs — which the guest LUKS-encrypts with a key it generates in its OWN RAM (the
+        key never crosses 9p; the host only ever sees ciphertext). It is the VM's writable disk
+        POOL for bulk, non-secret data that would otherwise exhaust the RAM-backed tmpfs: currently
+        a /scratch mount (build outputs, node_modules/target/.venv, caches), and — once the
+        writable-store increment lands — an overlay upper for a writable /nix/store (in-VM `nix
+        develop`/`nix build`). HOME and root stay tmpfs, so secrets (/login creds, API key, agent
+        memory) never leave guest RAM. Wiped on exit: the key dies with guest RAM (leaving inert
+        ciphertext) and the host image is removed. The host image dir is
+        ''${XDG_CACHE_HOME:-~/.cache}/ccvm by default (override CCVM_SCRATCH_DIR); a tmpfs target is
+        refused unless CCVM_SCRATCH_ALLOW_TMPFS=1. Sparse, so it only consumes what's written up to
+        the cap. Per-run override: CCVM_VM_DISK_SIZE=<GiB>|0. See design §3.11.
       '';
     };
 

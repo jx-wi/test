@@ -356,58 +356,58 @@ else
 fi
 
 # ===========================================================================
-# 12. storeDisk: the opt-in encrypted scratch disk stages a SPARSE raw image in
-#     a disk-backed dir + a seed marker; the LUKS key is guest-only (never in the
-#     seed); default off stages nothing; a bad size is rejected before boot.
+# 12. vmDiskSize: the opt-in encrypted disk pool stages a SPARSE raw image in a
+#     disk-backed dir + a seed marker; the LUKS key is guest-only (never in the
+#     seed); default off stages nothing; a non-integer size is rejected pre-boot.
 # ===========================================================================
-# Default (baked STOREDISK=""): no marker, no image.
+# Default (baked VMDISKSIZE=0): no marker, no image.
 SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 run)/seed"
-[[ ! -e "$SEED/scratch-disk" ]] &&
-  ok "storeDisk: default off stages no scratch marker" ||
-  no "storeDisk: scratch marker present without opt-in"
+[[ ! -e "$SEED/vm-disk" ]] &&
+  ok "vmDiskSize: default off stages no disk marker" ||
+  no "vmDiskSize: disk marker present without opt-in"
 
-# Opt in via the env override. Point the scratch dir at a known location and allow tmpfs (the
-# test tree may sit on tmpfs in the nix sandbox; the guard is exercised separately below).
+# Opt in via the env override (1 GiB). Point the image dir at a known location and allow tmpfs
+# (the test tree may sit on tmpfs in the nix sandbox; the guard is exercised separately below).
 SCRATCHDIR="$WORK/scratchdir"
 mkdir -p "$SCRATCHDIR"
 SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 \
-  CCVM_STORE_DISK=64M CCVM_SCRATCH_DIR="$SCRATCHDIR" CCVM_SCRATCH_ALLOW_TMPFS=1 run)/seed"
-[[ "$(cat "$SEED/scratch-disk" 2>/dev/null)" == 1 ]] &&
-  ok "storeDisk: CCVM_STORE_DISK=64M writes the scratch marker" ||
-  no "storeDisk: opt-in did not write the marker"
+  CCVM_VM_DISK_SIZE=1 CCVM_SCRATCH_DIR="$SCRATCHDIR" CCVM_SCRATCH_ALLOW_TMPFS=1 run)/seed"
+[[ "$(cat "$SEED/vm-disk" 2>/dev/null)" == 1 ]] &&
+  ok "vmDiskSize: CCVM_VM_DISK_SIZE=1 writes the disk marker" ||
+  no "vmDiskSize: opt-in did not write the marker"
 
-IMG="$(find "$SCRATCHDIR" -maxdepth 1 -name 'scratch-*.img' 2>/dev/null | head -1)"
+IMG="$(find "$SCRATCHDIR" -maxdepth 1 -name 'vmdisk-*.img' 2>/dev/null | head -1)"
 if [[ -n "$IMG" && -f "$IMG" ]]; then
-  ok "storeDisk: a scratch image was created in the disk-backed dir"
+  ok "vmDiskSize: a sparse disk image was created in the disk-backed dir"
   apparent="$(stat -c %s "$IMG" 2>/dev/null || echo 0)"
-  [[ "$apparent" == 67108864 ]] &&
-    ok "storeDisk: image apparent size == 64M" ||
-    no "storeDisk: image apparent size wrong (got $apparent, want 67108864)"
-  # Sparse: it must not have actually allocated 64M of blocks (du reports allocated KiB).
+  [[ "$apparent" == 1073741824 ]] &&
+    ok "vmDiskSize: image apparent size == 1 GiB" ||
+    no "vmDiskSize: image apparent size wrong (got $apparent, want 1073741824)"
+  # Sparse: it must not have actually allocated 1 GiB of blocks (du reports allocated KiB).
   allocated_kb="$(du -k "$IMG" 2>/dev/null | cut -f1)"
   [[ "${allocated_kb:-999999}" -lt 1024 ]] &&
-    ok "storeDisk: image is sparse (allocated ${allocated_kb:-?}KiB ≪ 64M apparent)" ||
-    no "storeDisk: image not sparse (allocated ${allocated_kb}KiB)"
+    ok "vmDiskSize: image is sparse (allocated ${allocated_kb:-?}KiB ≪ 1 GiB apparent)" ||
+    no "vmDiskSize: image not sparse (allocated ${allocated_kb}KiB)"
 else
-  no "storeDisk: no scratch image created in $SCRATCHDIR"
+  no "vmDiskSize: no disk image created in $SCRATCHDIR"
 fi
 
 # The LUKS key is generated IN THE GUEST and never crosses 9p, so no key material is ever in
 # the seed. (There is nothing host-side that could carry it; assert defensively anyway.)
 if [[ -z "$(find "$SEED" -name '*.key' 2>/dev/null)" ]]; then
-  ok "storeDisk: no key file staged into the seed (key is guest-only)"
+  ok "vmDiskSize: no key file staged into the seed (key is guest-only)"
 else
-  no "storeDisk: a key file LEAKED into the seed"
+  no "vmDiskSize: a key file LEAKED into the seed"
 fi
 
-rm -f "$SCRATCHDIR"/scratch-*.img
+rm -f "$SCRATCHDIR"/vmdisk-*.img
 
-# A non-size value is rejected before boot (a typo must not silently disable the disk).
-if HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 CCVM_STORE_DISK=lots \
+# A non-integer value is rejected before boot (a typo must not silently disable the disk).
+if HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 CCVM_VM_DISK_SIZE=lots \
    CCVM_SCRATCH_ALLOW_TMPFS=1 run >/dev/null 2>&1; then
-  no "storeDisk: invalid size 'lots' was not rejected"
+  no "vmDiskSize: invalid size 'lots' was not rejected"
 else
-  ok "storeDisk: invalid size is rejected"
+  ok "vmDiskSize: invalid size is rejected"
 fi
 
 # ---------------------------------------------------------------------------

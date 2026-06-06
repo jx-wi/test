@@ -165,7 +165,7 @@ let
         mount -t 9p -o ${p9} ccvm-claude-projects /home/ccvm/.claude/projects || true
       fi
 
-      # Opt-in encrypted ephemeral scratch (storeDisk). The host attached a raw SPARSE virtio-blk
+      # Opt-in encrypted ephemeral disk pool (vmDiskSize). The host attached a raw SPARSE virtio-blk
       # disk with serial=ccvm-scratch (so it resolves at /dev/disk/by-id/virtio-ccvm-scratch
       # regardless of /dev ordering). We LUKS-format it FRESH every boot with a key generated in
       # GUEST RAM — the key never crosses 9p, so the host only ever sees ciphertext (same spirit
@@ -176,7 +176,7 @@ let
       # tmpfs) — it must never fail this oneshot and block sshd. A LUKS header needs a few MiB, so
       # the host caps the size; we use a fast pbkdf2 (the key is already 64 random bytes, so a
       # memory-hard KDF would only slow boot — especially under TCG — for no added security).
-      if [ -f "$seed/scratch-disk" ]; then
+      if [ -f "$seed/vm-disk" ]; then
         modprobe dm_mod dm_crypt 2>/dev/null || true
         dev=/dev/disk/by-id/virtio-ccvm-scratch
         for _ in $(seq 1 50); do [ -e "$dev" ] && break; sleep 0.1; done

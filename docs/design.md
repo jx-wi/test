@@ -389,13 +389,27 @@ power-off, so the on-disk image is inert ciphertext the instant the VM stops —
 never runs. The trap still `rm`s the image as belt-and-suspenders, but the security guarantee
 rests on the key being gone, not on the delete succeeding.
 
-**Open decisions.**
+**Decisions (locked 2026-06-06).** After analysis, the chosen shape is **one ephemeral encrypted
+pool**, not two disks:
 
-- **Scope:** writable encrypted `/nix/store` **plus enabling `nix` in the guest** (the guest
-  currently sets `nix.enable = false`) for true in-VM `nix develop` — versus a generic encrypted
-  scratch only, leaving the store read-only. The former is more capable but more surface.
-- **Default:** off. Pure-RAM stays the default so boot stays fast and the no-disk invariant
-  holds unless explicitly opted into — e.g. `storeDisk = "16G"`.
+- **One disk, one knob — `vmDiskSize` (integer GiB; `0` = off).** It supersedes the phase-1
+  `storeDisk` string (we are pre-public, so the rename is free). The single encrypted, ephemeral
+  disk backs the **bulk, non-secret** writable areas — `/scratch` and (phase B) a writable
+  `/nix/store` overlay — while **`/home` and root stay tmpfs**, so secrets (`/login` creds, API
+  key material, agent memory) never leave guest RAM. The "split" intuition is real but the right
+  split line is *bulk on the encrypted disk, secrets in RAM*, achieved by **placement**, not by a
+  second sized disk.
+- **Why not a separate `/nix/store` disk?** Once the disk is encrypted with a guest-RAM key, disk-
+  vs-tmpfs makes **no** confidentiality difference against the in-guest attacker (it can read tmpfs
+  or decrypt the disk equally). A second disk only earns its keep for a **different lifecycle** —
+  i.e. a *persistent* store cache (safe, since store paths are content-addressed public packages)
+  alongside an ephemeral `/home`. That is a separate future feature with its own key-management
+  decision (a persistent disk needs a persistent key — likely an *unencrypted* store disk, since
+  the store is non-secret), explicitly **not** folded into `vmDiskSize`.
+- **Default: off.** Pure-RAM stays the default so boot stays fast and the no-disk invariant holds
+  unless explicitly opted into. When enabled, **32 GiB** is a sensible starting size. (`vmDiskSize`
+  is an integer so `mkDefault 32` reads naturally, but the *baked default is `0`* — off wins over
+  a default size, per the locked "opt-in" decision.)
 
 **Relationship to `mountHostNixStore`.** These are complementary, not competing. If the multi-GB
 closure is *already realised in the host store*, `mountHostNixStore = true` exposes it read-only
@@ -403,63 +417,46 @@ at zero RAM cost and needs no disk at all. The encrypted scratch disk is specifi
 the guest must **write** a large closure (or other large data) ephemerally and would otherwise
 exhaust RAM.
 
-#### Implementation plan (phased; default off)
+#### Implementation status & remaining plan
 
-Built in two phases so the low-surface, broadly-useful part can land and be verified before the
-more invasive writable-store work. **Both phases are off by default** — pure-RAM stays the
-default, boot stays fast, and the no-persistent-disk invariant holds unless explicitly opted in.
+Staged so the risky initrd work is isolated from the safe, post-boot part:
 
-**Config surface (touch all three default sites — they're deduped via `lib/defaults.nix`).** One
-option `storeDisk` (string; `""` = off, e.g. `"16G"`): value in `lib/defaults.nix`, baked as a
-new `@STOREDISK@` token in `lib/mkccvm.nix` (token lists go **20 → 21** in both `mkccvm.nix` and
-`tests/default.nix` — keep them balanced or the wrapper mis-bakes), and a `programs.ccvm.storeDisk`
-option in `modules/home-manager.nix` (`default = defaults.storeDisk`). Per-run override
-`CCVM_STORE_DISK=<size>|0`, same precedence as the other toggles. A second option
-`storeDiskMode = "scratch" | "store"` (default `"scratch"`) selects phase-1 vs phase-2 behaviour.
+**Increment A — the encrypted pool (`/scratch`) — IMPLEMENTED & KVM-VERIFIED, then GENERALIZED.**
+Shipped first as `storeDisk` (a sparse, guest-LUKS-encrypted disk mounted at `/scratch`; key
+generated in guest RAM, never on 9p; wiped on exit; host image in a disk-backed dir, tmpfs
+refused) and verified on a Nix+KVM box. Then **renamed/generalized to `vmDiskSize`** (integer GiB,
+`0` = off) per the locked single-pool decision — the disk is the shared pool, `/scratch` is its
+first consumer. The mechanics carry over unchanged: size validation, disk-backed scratch dir with
+the tmpfs guard, sparse `truncate`, `virtio-blk` with `serial=ccvm-scratch` (stable
+`/dev/disk/by-id` path regardless of `/dev` ordering), the seed marker, `cleanup()` `rm`, and the
+guest seed-service LUKS-format/open/mkfs/mount with fail-open. `/home` and root stay tmpfs.
 
-**Phase 1 — generic encrypted scratch (build first; lowest surface).**
+**Increment B — writable `/nix/store` overlay + in-VM `nix` — REMAINING (the hard part).** Use the
+decrypted pool as the **overlay upper** over the read-only squashfs `/nix/store` and flip
+`nix.enable = true`, so `nix develop`/`nix build` realise into disk-backed (not RAM) store. The
+catch that makes this materially harder than A: `/nix/store` is mounted in the **initrd**
+(`fileSystems."/nix/store"`, `neededForBoot`), and the running system's binaries are open from it —
+so the LUKS-open + overlay must happen **in the initrd**, before the system pivots, not in the
+post-boot seed service. That means:
+- `cryptsetup` (+ `e2fsprogs`, dm-crypt modules) in the **initrd** closure, and a
+  `boot.initrd.systemd` service that finds the disk by serial, generates the key in initrd RAM,
+  `luksFormat`s + opens it, `mkfs.ext4`, then mounts `lowerdir=<ro squashfs>` +
+  `upperdir=<pool>/store-upper` as an overlay at `/nix/store` before `sysroot`/store is needed.
+- **Fail-open is critical and harder here:** if any step fails, the initrd MUST fall back to
+  today's plain read-only squashfs `/nix/store` so the VM still boots (a bricked boot is the worst
+  outcome). This is the main risk and why B is built and **boot-tested in a tight loop on Nix+KVM**
+  separately from A.
+- `nix.enable = true` only when the pool is on (the guest learns this from the seed marker; a guest
+  rebuild isn't needed — the marker gates the initrd service, and `nix.enable` can be unconditional
+  since an unused nix daemon is cheap, or gated by a baked flag if we want the leaner default).
+- The same pool also keeps backing `/scratch` (and optionally `/tmp`) post-boot, so one disk serves
+  both. Build caches are pointed at `/scratch` by documentation (`TMPDIR`, `CARGO_TARGET_DIR`, …).
 
-- *Wrapper (`wrapper/ccvm.sh`).* When `STOREDISK` is non-empty: resolve a **disk-backed** scratch
-  dir — **never** `XDG_RUNTIME_DIR`/`$TMP` (those are tmpfs; that would put the "disk" back in
-  RAM and defeat the point). Default `${XDG_CACHE_HOME:-$HOME/.cache}/ccvm`, overridable via
-  `CCVM_SCRATCH_DIR`; `die` if it lands on a tmpfs/ramfs (`stat -f -c %T`). Create a **sparse**
-  raw image (`truncate -s "$STOREDISK" "$IMG"`), attach with a **stable serial** so the guest
-  finds it regardless of disk ordering (critical: with `mountHostNixStore` the store is a 9p
-  mount, so the scratch disk is `/dev/vda`, otherwise `/dev/vdb`):
-  `-drive id=scratch,file=$IMG,format=raw,if=none -device virtio-blk-$BUS,drive=scratch,serial=ccvm-scratch`.
-  Write a `seed/scratch-disk` marker. Track `SCRATCH_IMG` and `rm -f` it in `cleanup()`
-  (belt-and-suspenders; the key dying with guest RAM is the *real* erasure — see below).
-- *Guest (`guest/default.nix`).* Add `pkgs.cryptsetup` to `ccvm-seed-setup`'s `runtimeInputs`;
-  make dm-crypt loadable post-boot: `boot.kernelModules = [ "dm_mod" "dm_crypt" ]` plus the
-  `aes`/`xts`/`sha256` crypto modules (cryptsetup modprobes, but list them so a missing module
-  can't silently fail the format).
-- *Guest setup (`guest/launcher.nix`, in `ccvm-seed-setup`, after the workspace block).* When
-  `seed/scratch-disk` is present:
-  1. `dev=/dev/disk/by-id/virtio-ccvm-scratch` (serial-based; `udevadm settle`/short wait first).
-  2. Generate the LUKS key **in guest RAM, never on 9p**: `( umask 077; head -c 64 /dev/urandom
-     > /run/ccvm-scratch.key )` (`/run` is tmpfs). The host only ever sees ciphertext — strictly
-     stronger than passing a key through the seed, same spirit as the API key (§3.7).
-  3. `cryptsetup luksFormat --batch-mode --type luks2 "$dev" /run/ccvm-scratch.key` — **fresh
-     every boot** (a stale header from a crashed prior run is irrelevant; we reformat).
-  4. `cryptsetup open --key-file /run/ccvm-scratch.key "$dev" ccvm-scratch`, then
-     `shred -u /run/ccvm-scratch.key` (RAM-only anyway; removed for hygiene).
-  5. `mkfs.ext4 -q -E nodiscard /dev/mapper/ccvm-scratch`; mount at `/scratch`;
-     `install -d -m 0770 -o ccvm -g users /scratch`.
-  6. **Best-effort + fail-open:** any failure logs and continues *without* `/scratch` — it must
-     never fail the oneshot and block sshd (the agent still has tmpfs). Same discipline as the
-     uid-remap and egress fallbacks.
-- *Making it useful.* The ccvm-context blurb tells the agent `/scratch` exists and is the place
-  for large ephemeral writes; optionally document pointing heavy writers at it
-  (`TMPDIR=/scratch/tmp`, `npm_config_cache`, `CARGO_TARGET_DIR=/scratch/cargo`). Keep these as
-  documented suggestions, not forced env, so nothing surprises a user who didn't opt in.
-
-**Phase 2 — writable `/nix/store` + in-VM `nix` (follow-on; higher surface).** Use the decrypted
-device as the **overlay upper** over the read-only squashfs `/nix/store` and flip `nix.enable =
-true` so `nix develop`/`nix build` realise into disk-backed (not RAM) store. The catch:
-`/nix/store` is mounted in the **initrd** (`fileSystems."/nix/store"`, `neededForBoot`), so making
-it a writable overlay means doing the LUKS open + overlay **in the initrd** (a
-`boot.initrd.systemd` service with `cryptsetup` in the initrd closure), not the post-boot seed
-service — materially more boot-time surface. Gate on `storeDiskMode = "store"`.
+**Tests stay as established:** `host.sh` for the host-side staging (marker, sparse image, no key in
+seed, size validation) in `nix flake check`; the `boot.nix` `scratch` posture + `stub-claude.sh`
+`SCRATCH:*` reports for the live encrypted mount; and, for B, an added `STORE:writable` assertion
+(the stub writes a path into `/nix/store` and confirms it sticks) plus a real in-VM `nix build`
+smoke check.
 
 **Tests.**
 - *`host.sh` (dry-run, new block):* opt-in writes `seed/scratch-disk`; the sparse image exists at

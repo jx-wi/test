@@ -72,9 +72,9 @@ in
     boot.initrd.kernelModules = [ "virtio_pci" "virtio_mmio" "virtio_blk" ];
     boot.initrd.checkJournalingFS = false;
 
-    # device-mapper + dm-crypt for the opt-in encrypted scratch disk (storeDisk). Loaded in the
+    # device-mapper + dm-crypt for the opt-in encrypted disk pool (vmDiskSize). Loaded in the
     # running system (not the initrd) because the LUKS format/open happens post-boot in the seed
-    # service (guest/launcher.nix); harmless when storeDisk is off. The aes/xts/sha crypto the
+    # service (guest/launcher.nix); harmless when vmDiskSize is off. The aes/xts/sha crypto the
     # cipher needs is auto-loaded by the kernel crypto API when dm-crypt requests xts(aes).
     boot.kernelModules = [ "dm_mod" "dm_crypt" ];
 

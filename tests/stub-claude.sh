@@ -44,7 +44,7 @@ else
 fi
 [ -r "$HOME/.config/git/ignore" ] && echo "GIT:ignore-present"
 
-# storeDisk: the opt-in encrypted scratch should be a writable mount at /scratch backed by a
+# vmDiskSize: the opt-in encrypted disk pool should be a writable mount at /scratch backed by a
 # dm-crypt device. Report what landed so boot.sh can assert it survived a real boot. The crypt
 # check reads /sys unprivileged: the mapper device's dm/uuid is CRYPT-LUKS2-… for dm-crypt.
 if mountpoint -q /scratch 2>/dev/null; then

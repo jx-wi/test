@@ -21,7 +21,7 @@ in
   # Allowlist example.com only; the stub probes both it (must reach) and a non-listed host
   # (must be blocked). api.anthropic.com is auto-included by the builder regardless.
   egress = mk { egressAllowlist = [ "example.com" ]; egressPorts = [ 443 ]; };
-  # Opt-in encrypted scratch disk; the stub asserts /scratch is a writable dm-crypt mount.
-  # 128M leaves room for the LUKS header + an ext4 (sparse, so it costs ~nothing on disk).
-  scratch = mk { storeDisk = "128M"; };
+  # Opt-in encrypted disk pool; the stub asserts /scratch is a writable dm-crypt mount.
+  # 1 GiB leaves room for the LUKS header + an ext4 (sparse, so it costs ~nothing on disk).
+  scratch = mk { vmDiskSize = 1; };
 }
