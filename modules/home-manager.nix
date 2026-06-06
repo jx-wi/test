@@ -39,7 +39,10 @@ in
     memory = lib.mkOption {
       type = lib.types.ints.positive;
       default = 4096;
-      description = "VM RAM in MiB.";
+      description = ''
+        VM RAM in MiB. Per-run override without a rebuild: `CCVM_MEMORY=<MiB> ccvm …`
+        (memory is a runtime QEMU arg) — handy for a heavy `nix develop` / build closure.
+      '';
     };
 
     cores = lib.mkOption {

@@ -150,7 +150,38 @@ SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CONFIG=0 run)/seed"
   no "default mode not rw (got $(cat "$SEED/mode"))"
 
 # ===========================================================================
-# 5. Static: the wrapper uses SendEnv (in-channel) and never SetEnv (argv).
+# 5. CCVM_MEMORY override: a positive integer is accepted, anything else rejected
+#    before boot (so a typo can't silently fall back to the baked default).
+# ===========================================================================
+if HOME="$FAKE_HOME" CCVM_SHARE_CONFIG=0 CCVM_MEMORY=16384 run >/dev/null 2>&1; then
+  ok "CCVM_MEMORY accepts a positive integer"
+else
+  no "CCVM_MEMORY=16384 was rejected"
+fi
+if HOME="$FAKE_HOME" CCVM_SHARE_CONFIG=0 CCVM_MEMORY=lots run >/dev/null 2>&1; then
+  no "CCVM_MEMORY=lots was not rejected"
+else
+  ok "CCVM_MEMORY rejects a non-integer"
+fi
+
+# ===========================================================================
+# 6. Host uid/gid are staged into the seed (the guest remaps its agent user to
+#    them so 9p passthrough gives correct workspace ownership for any host uid).
+# ===========================================================================
+SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CONFIG=0 run)/seed"
+if [[ "$(cat "$SEED/host-uid" 2>/dev/null)" == "$(id -u)" ]]; then
+  ok "host uid staged into the seed"
+else
+  no "host-uid wrong/missing (got '$(cat "$SEED/host-uid" 2>/dev/null)', want '$(id -u)')"
+fi
+if [[ "$(cat "$SEED/host-gid" 2>/dev/null)" == "$(id -g)" ]]; then
+  ok "host gid staged into the seed"
+else
+  no "host-gid wrong/missing (got '$(cat "$SEED/host-gid" 2>/dev/null)', want '$(id -g)')"
+fi
+
+# ===========================================================================
+# 7. Static: the wrapper uses SendEnv (in-channel) and never SetEnv (argv).
 # ===========================================================================
 grep -q 'SendEnv=' "$CCVM" && ok "wrapper passes the key via SendEnv" ||
   no "wrapper does not use SendEnv"

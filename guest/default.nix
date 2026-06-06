@@ -34,11 +34,10 @@ in
       default = [ ];
       description = "Extra packages available inside the guest.";
     };
-    shareHostConfig = lib.mkOption {
-      type = lib.types.bool;
-      default = false;
-      description = "Share the host's ~/.claude config read-only (reuse host login, settings, commands, memory).";
-    };
+    # NOTE: host-config sharing is driven entirely by the wrapper + the `seed/share-config`
+    # flag (read by launcher.nix), NOT by a guest option — so there is deliberately no
+    # `shareHostConfig` option here. The host-side default lives in lib/mkccvm.nix and is
+    # baked into the wrapper as @SHARECONFIG@.
     mountHostNixStore = lib.mkOption {
       type = lib.types.bool;
       default = false;
@@ -125,8 +124,9 @@ in
     networking.firewall.enable = false;
 
     ##########################################################################
-    # User: ccvm (uid 1000, matches a typical host user so 9p uid-passthrough
-    # lets the agent write the workspace in rw mode). zsh with vi-mode.
+    # User: ccvm (baked uid 1000). 9p passthrough (security_model=none) is numeric,
+    # so for a host user whose uid != 1000 the seed service remaps this user to the
+    # host id at boot (Before=sshd) — see guest/launcher.nix. zsh with vi-mode.
     ##########################################################################
     users.mutableUsers = false;
     # Authentication is supplied at runtime via the seed (authorized_keys), not declared
