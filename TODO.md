@@ -25,8 +25,7 @@ half-remembered context.
 ## Current state (keep this updated)
 
 - **Branch `main` only** (no git remote — every commit is local; see #5). Done & committed:
-  **#1, #2, #3, #4, #6(meta + boot-timeout + help/version), #7, #8, #9, #10, #11, #12.** Recent
-  commits (newest first):
+  **#1, #2, #3, #4, #6, #7, #8, #9, #10, #11, #12.** Recent commits (newest first):
   - `decad40` #11/#12 persistClaudeProjects (resume + memory persist; **committed** — was the
     last uncommitted item)
   - `c833b47` #8 extraClaudeMd (ccvm-context staged as the guest's `~/.claude/CLAUDE.md`)
@@ -220,7 +219,7 @@ so far are local-only.
 
 ---
 
-## 6. 🟡 Smaller polish — LOW (3 of 4 done; only the defaults-dedup left)
+## 6. ✅ Smaller polish — DONE (4 of 4)
 
 - ✅ **`ccvm --ccvm-help` / `--ccvm-version` — DONE.** ccvm's own flags were undiscoverable
   (`--help`/`--version` forward to claude). Added `--ccvm-help` (prints ccvm's flags + the
@@ -233,8 +232,10 @@ so far are local-only.
   `tests/default.nix`, `tests/host.sh` §11 (3 assertions: `--ccvm-version` echoes the baked
   string; `--ccvm-help` prints usage+flags; bare `--version` is forwarded), README + CLAUDE.md.
   **Verified here:** `bash -n` clean; `host.sh` **39/39** via the dry-run recipe (recipe below
-  now substitutes `@VERSION@`). **Unverified here:** `nix flake check` (Nix eval / 20-token
-  balance) — confirm green on the Nix box.
+  now substitutes `@VERSION@`). **Verified on the Nix box** (`8ab8320`): `nix flake check`
+  green — the 20-token `replaceStrings` balance baked correctly through Nix eval (only the
+  pre-existing cosmetic `homeManagerModules`/`ccvmParts` warnings). No `boot.sh` change needed
+  (the flags exit before boot; `host.sh` §11 covers the output against the real wrapper).
 - ✅ **Longer `wait_for_boot` timeout under TCG — DONE.** `wait_for_boot` now scales its cap
   by accel: KVM keeps the snappy 120×0.3s (~36 s), TCG gets 600×0.3s (~180 s); `CCVM_BOOT_TRIES`
   overrides. This was a real silent-failure source: a cold TCG boot on a busy box exceeded the
@@ -245,8 +246,14 @@ so far are local-only.
   its last diagnostic `[ -e …credentials… ]` returned non-zero when config wasn't shared, and
   the wrapper propagates the remote exit code, so a clean run looked like a failure. Verified:
   `bash tests/boot.sh` 7/7 clean on the Nix+KVM box.
-- ⬜ Dedupe default values between `lib/mkccvm.nix` `defaults` and `modules/home-manager.nix`
-  option defaults (two sources of truth for `memory`/`cores`/`shareClaudeConfig`/… → drift risk).
+- ✅ **Dedupe default values — DONE.** The default VALUES were duplicated between
+  `lib/mkccvm.nix` `defaults` and every `modules/home-manager.nix` option `default` (drift
+  risk). Extracted them to a single `lib/defaults.nix` (`{ pkgs }: { … }`, all 15 keys);
+  `mkccvm.nix` now `import ./defaults.nix` for its merge baseline, and each home-manager option
+  does `default = defaults.<name>` (descriptions stay in the module; `defaultText` kept for
+  `package`/`extraClaudeMd`). 15 options ↔ 15 keys, verified balanced. **Unverified here**
+  (no Nix CLI): `nix flake check` — the default-config `packages.*.ccvm` build reads
+  `defaults.nix`, so an eval error there would surface; confirm green on the Nix box.
 - ✅ **Add `meta` info to the flake.** `meta` (description/homepage/license=MIT/mainProgram/
   maintainers/platforms) defined once in `lib/mkccvm.nix`, set on the wrapper derivation (via
   `writeShellApplication`'s `meta` arg) and re-exported as `parts.meta`, which the flake's `apps`
@@ -463,8 +470,8 @@ project's slug instead of all of `projects/` if exposing all history to in-VM wr
 
 - **No git remote yet** (#5): every commit is local-only; `main` is the only branch (the
   `egress-allowlist` branch was merged and deleted).
-- **Everything through #12 is committed.** Open work items left: **#5** (jx-wi/remote — mostly
-  your action), **#6 defaults-dedup** (LOW), **#7 push/export HTTPS doc** (LOW), **#10 FDE**
+- **Everything through #12 is committed; #6 is now fully done (4/4).** Open work items left:
+  **#5** (jx-wi/remote — mostly your action), **#7 push/export HTTPS doc** (LOW), **#10 FDE**
   (design only). Nothing is mid-flight on the working tree.
 - **Commit trailer:** `Co-authored-by: Claude <noreply@anthropic.com>` (exact form; see CLAUDE.md).
 - **Recently done, not a blocker:** `CCVM_MEMORY=<MiB>` per-run guest-RAM override (wrapper + docs

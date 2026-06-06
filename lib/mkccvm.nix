@@ -13,45 +13,10 @@
 let
   lib = pkgs.lib;
 
-  defaults = {
-    package = pkgs.claude-code;
-    autoUpdateFiles = true;
-    memory = 4096;
-    cores = 4;
-    extraPackages = [ ];
-    mountHostNixStore = false;
-    apiKeyVariable = "ANTHROPIC_API_KEY";
-    shareClaudeConfig = true;
-    # Persist the in-VM ~/.claude/projects directory back to the host (opt-in, off by default).
-    # That directory holds Claude's per-project SESSION TRANSCRIPTS (so `claude --resume` works
-    # across runs) and the per-project MEMORY. Without this, those writes land in the ephemeral
-    # ~/.claude overlay upper and vanish on exit — a session started in ccvm can't be resumed
-    # later ("ID not found"), and memories don't survive. Scoped to projects/ ONLY, so the OAuth
-    # credential (~/.claude/.credentials.json, NOT under projects/) is still never written back.
-    # Per-run override: CCVM_PERSIST_PROJECTS=0|1.
-    persistClaudeProjects = false;
-    # Reuse the host's git identity/aliases/ignores inside the VM so in-VM `git` behaves like
-    # native (commits as you). On by default (native-mirroring spirit). The wrapper stages a
-    # SANITIZED copy of the global git config — host-only /nix/store tool paths and credentials
-    # are stripped — so nothing secret crosses and nothing dangles. Per-run: CCVM_SHARE_GIT_CONFIG.
-    shareGitConfig = true;
-    # Context injected as the guest's ~/.claude/CLAUDE.md (global memory) so the agent knows it
-    # is running inside ccvm — ephemeral, sandboxed, only the project dir shared — and adapts
-    # (more autonomous; commits work but pushes don't). Staged via the seed, NOT a claude flag,
-    # so transparent passthrough is preserved. The wrapper prepends a runtime-accurate line
-    # about the current file-sharing mode (rw = live host edits / overlay = discarded on exit).
-    # Set to "" to inject nothing. Per-run override: CCVM_CLAUDE_MD=<file> (empty disables).
-    extraClaudeMd = builtins.readFile ../lib/ccvm-context.md;
-    lockGuestMemory = false;
-    # Egress allowlist (opt-in). Empty list = open egress (the native default — npm/pip/git
-    # clone/WebFetch all work like native claude). A non-empty list switches the guest to a
-    # default-deny egress firewall that permits only these destinations (FQDNs are resolved
-    # host-side at launch; IPs/CIDRs pass through) plus DNS — api.anthropic.com is always
-    # auto-included so auth never breaks.
-    egressAllowlist = [ ];
-    egressPorts = [ 443 ];
-    extraGuestModules = [ ];
-  };
+  # Default config VALUES live in lib/defaults.nix — the single source of truth shared with
+  # the home-manager module's option defaults, so the two can't drift. See that file for the
+  # per-option semantics; the home-manager module carries the full user-facing descriptions.
+  defaults = import ./defaults.nix { inherit pkgs; };
 in
 userConfig:
 let

@@ -7,6 +7,9 @@
 let
   cfg = config.programs.ccvm;
   mkCcvm = import ../lib/mkccvm.nix { inherit pkgs; };
+  # Option defaults come from the SAME source mkccvm.nix uses, so a default can't drift
+  # between the two. Only the user-facing descriptions live here.
+  defaults = import ../lib/defaults.nix { inherit pkgs; };
   ccvmPkg = (mkCcvm {
     inherit (cfg)
       package autoUpdateFiles memory cores extraPackages mountHostNixStore
@@ -20,14 +23,14 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = pkgs.claude-code;
+      default = defaults.package;
       defaultText = lib.literalExpression "pkgs.claude-code";
       description = "The claude-code package to run inside the VM (unfree; override/pin as you like).";
     };
 
     autoUpdateFiles = lib.mkOption {
       type = lib.types.bool;
-      default = true;
+      default = defaults.autoUpdateFiles;
       description = ''
         true (default): the host project is mounted read-write; edits land on the host
         live — identical to native `claude`. false (secure): the host project is read-only
@@ -39,7 +42,7 @@ in
 
     memory = lib.mkOption {
       type = lib.types.ints.positive;
-      default = 4096;
+      default = defaults.memory;
       description = ''
         VM RAM in MiB. Per-run override without a rebuild: `CCVM_MEMORY=<MiB> ccvm …`
         (memory is a runtime QEMU arg) — handy for a heavy `nix develop` / build closure.
@@ -48,32 +51,32 @@ in
 
     cores = lib.mkOption {
       type = lib.types.ints.positive;
-      default = 4;
+      default = defaults.cores;
       description = "VM vCPUs.";
     };
 
     extraPackages = lib.mkOption {
       type = lib.types.listOf lib.types.package;
-      default = [ ];
+      default = defaults.extraPackages;
       example = lib.literalExpression "with pkgs; [ go gopls nodejs python3 ]";
       description = "Extra packages available inside the VM (project toolchains). A sensible base set is always included.";
     };
 
     mountHostNixStore = lib.mkOption {
       type = lib.types.bool;
-      default = false;
+      default = defaults.mountHostNixStore;
       description = "Share the host /nix/store read-only instead of building a self-contained image (smaller/faster, less isolated).";
     };
 
     apiKeyVariable = lib.mkOption {
       type = lib.types.str;
-      default = "ANTHROPIC_API_KEY";
+      default = defaults.apiKeyVariable;
       description = "Name of the host env var carrying the Anthropic API key. Passed to the VM only over the encrypted SSH channel (SendEnv); never written to disk or argv.";
     };
 
     shareClaudeConfig = lib.mkOption {
       type = lib.types.bool;
-      default = true;
+      default = defaults.shareClaudeConfig;
       description = ''
         true (default): read-only mount the host's ~/.claude config into the VM (and copy
         ~/.claude.json), so it reuses your host login, settings, custom commands and global
@@ -87,7 +90,7 @@ in
 
     persistClaudeProjects = lib.mkOption {
       type = lib.types.bool;
-      default = false;
+      default = defaults.persistClaudeProjects;
       description = ''
         false (default): Claude's writes to ~/.claude/projects inside the VM — per-project
         SESSION TRANSCRIPTS and MEMORY — land in the ephemeral config overlay and vanish on
@@ -103,7 +106,7 @@ in
 
     shareGitConfig = lib.mkOption {
       type = lib.types.bool;
-      default = true;
+      default = defaults.shareGitConfig;
       description = ''
         true (default): stage a SANITIZED copy of your global git config into the VM (laid at
         ~/.config/git/config) so in-VM `git` commits as you, with your aliases and global
@@ -120,7 +123,7 @@ in
 
     extraClaudeMd = lib.mkOption {
       type = lib.types.lines;
-      default = builtins.readFile ../lib/ccvm-context.md;
+      default = defaults.extraClaudeMd;
       defaultText = lib.literalExpression "builtins.readFile ../lib/ccvm-context.md";
       description = ''
         Markdown staged as the guest's ~/.claude/CLAUDE.md (global memory) so the agent knows
@@ -138,7 +141,7 @@ in
 
     lockGuestMemory = lib.mkOption {
       type = lib.types.bool;
-      default = false;
+      default = defaults.lockGuestMemory;
       description = ''
         Lock the VM's guest RAM into host memory (QEMU -overcommit mem-lock=on) so it can
         never be paged out to the host's (possibly unencrypted) swap — keeping in-VM secrets
@@ -150,7 +153,7 @@ in
 
     egressAllowlist = lib.mkOption {
       type = lib.types.listOf lib.types.str;
-      default = [ ];
+      default = defaults.egressAllowlist;
       example = lib.literalExpression ''[ "github.com" "registry.npmjs.org" "10.0.0.0/8" ]'';
       description = ''
         Opt-in network egress allowlist. Empty (default) keeps egress fully OPEN, so the
@@ -165,13 +168,13 @@ in
 
     egressPorts = lib.mkOption {
       type = lib.types.listOf lib.types.port;
-      default = [ 443 ];
+      default = defaults.egressPorts;
       description = "Destination ports the egress allowlist permits (only used when egressAllowlist is non-empty). Add 80 for plain-HTTP mirrors/redirects.";
     };
 
     extraGuestModules = lib.mkOption {
       type = lib.types.listOf lib.types.unspecified;
-      default = [ ];
+      default = defaults.extraGuestModules;
       description = "Extra NixOS modules merged into the guest configuration (escape hatch).";
     };
   };
