@@ -327,6 +327,34 @@ grep -q 'PERSIST to the host this run' "$SEED/claude-md" 2>/dev/null &&
   ok "persist: claude-md tells the agent memory survives when persist is on" ||
   no "persist: claude-md memory note did not flip for the persist-on run"
 
+# ===========================================================================
+# 11. ccvm's own --ccvm-help / --ccvm-version: handled by the wrapper (printed
+#     and exited before any VM work), while bare --help/--version pass through
+#     to claude verbatim (transparent passthrough).
+# ===========================================================================
+VOUT="$(HOME="$FAKE_HOME" run --ccvm-version)"
+[[ "$VOUT" == "ccvm 0.0.0-test" ]] &&
+  ok "--ccvm-version prints the baked version and exits" ||
+  no "--ccvm-version wrong output (got '$VOUT')"
+
+HOUT="$(HOME="$FAKE_HOME" run --ccvm-help)"
+if grep -q '^Usage: ccvm' <<<"$HOUT" && grep -q -- '--ccvm-version' <<<"$HOUT" &&
+  grep -q -- '--shell' <<<"$HOUT"; then
+  ok "--ccvm-help prints ccvm's own usage and flags"
+else
+  no "--ccvm-help output missing usage/flags"
+fi
+
+# Passthrough guard: bare --version / --help are NOT intercepted — they must reach claude's
+# argv unchanged (otherwise ccvm would shadow claude's own help/version).
+SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 run --version)/seed"
+mapfile -t -d "" GOT <"$SEED/claude-args"
+if [[ " ${GOT[*]} " == *" --version "* ]]; then
+  ok "bare --version is forwarded to claude (not consumed by ccvm)"
+else
+  no "bare --version was not forwarded to claude: ${GOT[*]@Q}"
+fi
+
 # ---------------------------------------------------------------------------
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

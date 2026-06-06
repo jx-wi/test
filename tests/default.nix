@@ -38,6 +38,7 @@ let
           "@MEMLOCK@"
           "@EGRESSALLOW@"
           "@EGRESSPORTS@"
+          "@VERSION@"
         ]
         [
           "/dev/null" # KERNEL    } never read: the dry-run hook exits before boot.
@@ -62,6 +63,7 @@ let
           "0" # MEMLOCK
           egressAllow # EGRESSALLOW (empty = open egress, the default)
           egressPorts # EGRESSPORTS
+          "0.0.0-test" # VERSION (fixture; host.sh asserts --ccvm-version echoes it)
         ]
         (builtins.readFile ../wrapper/ccvm.sh);
     };

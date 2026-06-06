@@ -29,12 +29,50 @@ MODE="@MODE@" # rw (autoUpdateFiles=true, default — mirrors native claude) | o
 MEMLOCK="@MEMLOCK@" # 1 = mlock guest RAM (lockGuestMemory) so it can't hit host swap; 0 = off
 EGRESSALLOW="@EGRESSALLOW@" # space-separated FQDN/IP/CIDR allowlist; empty = open egress (default)
 EGRESSPORTS="@EGRESSPORTS@" # space-separated dst ports the allowlist permits (default 443)
+VERSION="@VERSION@"         # ccvm's own version string (baked from lib/mkccvm.nix)
 
 # ---- helpers ---------------------------------------------------------------
 warn() { printf 'ccvm: %s\n' "$*" >&2; }
 die() {
   printf 'ccvm: error: %s\n' "$*" >&2
   exit 1
+}
+
+# ccvm's own usage. Only ccvm's flags live here; every other argument is forwarded verbatim
+# to claude (so `ccvm --help` reaches *claude's* help, by design — this is `--ccvm-help`).
+ccvm_help() {
+  cat <<'EOF'
+ccvm — run Claude Code in an ephemeral, RAM-only QEMU microVM.
+
+Usage: ccvm [ccvm flags] [claude args...]
+
+All arguments are forwarded verbatim to `claude` EXCEPT ccvm's own flags below
+(so `ccvm --help` / `ccvm --version` reach claude; use the --ccvm-* forms for ccvm).
+
+ccvm flags:
+  --shell                 Drop into a guest shell instead of launching claude.
+  --ccvm-debug            Stream the guest console while booting; keep the scratch dir.
+  --auto-update-files     Mirror edits LIVE to the host project dir (rw mode).
+  --no-auto-update-files  Keep edits in an ephemeral overlay, discarded on exit.
+  --ccvm-help             Show this help and exit.
+  --ccvm-version          Print the ccvm version and exit.
+
+Per-run environment overrides (a CCVM_* var overrides the baked default; an explicit
+flag wins over the env var):
+  CCVM_SHELL=1                 same as --shell
+  CCVM_DEBUG=1                 same as --ccvm-debug
+  CCVM_AUTOUPDATE=0|1          file-sharing mode (overlay | rw)
+  CCVM_SHARE_CLAUDE_CONFIG=0|1 reuse the host ~/.claude (login, settings, memory)
+  CCVM_PERSIST_PROJECTS=0|1    persist ~/.claude/projects (resume + memory) to the host
+  CCVM_SHARE_GIT_CONFIG=0|1    stage a sanitized host git config into the guest
+  CCVM_CLAUDE_MD=<file>        alternate ccvm-context CLAUDE.md (empty disables it)
+  CCVM_MLOCK=0|1               lock guest RAM so it can't reach host swap
+  CCVM_MEMORY=<MiB>            guest RAM for this run
+  CCVM_ACCEL=tcg               force software emulation (no KVM)
+  CCVM_MACHINE=<type>          QEMU machine type (default microvm on x86_64)
+
+See the README and docs/design.md for the threat model and full option reference.
+EOF
 }
 
 # Animated boot progress on stderr. The wrapper is otherwise silent through wait_for_boot,
@@ -164,6 +202,8 @@ DEBUG="${CCVM_DEBUG:-0}"
 DRYRUN="${CCVM_DRYRUN:-0}"
 [[ ${CCVM_SHELL:-0} == 1 ]] && SHELL_MODE=1
 MODE_OVERRIDE=""
+SHOW_HELP=0
+SHOW_VERSION=0
 FWD=()
 for arg in "$@"; do
   case "$arg" in
@@ -173,9 +213,24 @@ for arg in "$@"; do
     # NOT forwarded to claude — claude still receives only the user's own arguments.
     --auto-update-files) MODE_OVERRIDE=rw ;;
     --no-auto-update-files) MODE_OVERRIDE=overlay ;;
+    # ccvm's own help/version. Namespaced (--ccvm-*) so bare --help/--version still pass
+    # through to claude, preserving transparent passthrough.
+    --ccvm-help) SHOW_HELP=1 ;;
+    --ccvm-version) SHOW_VERSION=1 ;;
     *) FWD+=("$arg") ;;
   esac
 done
+
+# Help/version short-circuit: print and exit before any VM work (no scratch dir, keys, or
+# boot), so they are instant and side-effect-free. Help wins if both are given.
+if [[ $SHOW_HELP == 1 ]]; then
+  ccvm_help
+  exit 0
+fi
+if [[ $SHOW_VERSION == 1 ]]; then
+  printf 'ccvm %s\n' "$VERSION"
+  exit 0
+fi
 
 # File-sharing mode precedence: an explicit ccvm flag wins, else the CCVM_AUTOUPDATE env
 # var, else the baked default (autoUpdateFiles, now true by default).

@@ -66,7 +66,9 @@ These are the whole point of the project. Treat any change that weakens one as a
   is forwarded to `claude` verbatim, including `--dangerously-skip-permissions` (opt-in by
   the user, never auto-added). The *only* args the wrapper consumes (and does **not**
   forward) are its own: `--shell`, `--ccvm-debug`, `--auto-update-files`,
-  `--no-auto-update-files`. Preserve that interception boundary.
+  `--no-auto-update-files`, `--ccvm-help`, `--ccvm-version`. They are deliberately
+  `--ccvm-`/`--*-files`-namespaced so bare `--help`/`--version` still reach claude.
+  Preserve that interception boundary.
 
 ## Build / test / debug
 

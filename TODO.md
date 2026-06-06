@@ -25,7 +25,10 @@ half-remembered context.
 ## Current state (keep this updated)
 
 - **Branch `main` only** (no git remote — every commit is local; see #5). Done & committed:
-  **#1, #2, #3, #4, #6(meta), #7, #8, #9, #10.** Recent commits (newest first):
+  **#1, #2, #3, #4, #6(meta + boot-timeout + help/version), #7, #8, #9, #10, #11, #12.** Recent
+  commits (newest first):
+  - `decad40` #11/#12 persistClaudeProjects (resume + memory persist; **committed** — was the
+    last uncommitted item)
   - `c833b47` #8 extraClaudeMd (ccvm-context staged as the guest's `~/.claude/CLAUDE.md`)
   - `9c15793` #9 boot spinner + guest terminfo fix (terminal fidelity under `--shell`)
   - `db0405f` #10 FDE scratch-disk **design** captured (design.md §3.11; design-only)
@@ -36,15 +39,17 @@ half-remembered context.
   cross-run `--resume` worked, and the credential check was clean (host `~/.claude/.credentials.json`
   hash + mtime + size identical before/after a persist run; `find ~/.claude/projects` for any
   credential → zero hits). Committed alongside this TODO refresh.
-- **`host.sh` = 34 assertions** (15 base + 2 uid/gid #4 + 1 egress-open #2 + 8 git #7 + 5
-  extraClaudeMd #8 + **3 persist #12**); `egress.sh` = 6. **34/34 green here** via the dry-run
-  recipe (the recipe below was updated for the `@CLAUDEMD@`/`@PERSISTPROJECTS@` tokens).
+- **`host.sh` = 39 assertions** (15 base + 2 uid/gid #4 + 1 egress-open #2 + 8 git #7 + 5
+  extraClaudeMd #8 + 3 persist #12 + **3 help/version #6**); `egress.sh` = 6. **39/39 green
+  here** via the dry-run recipe (the recipe below was updated for the
+  `@CLAUDEMD@`/`@PERSISTPROJECTS@`/`@VERSION@` tokens).
 - **`boot.sh` = 17 assertions** — **17/17 VERIFIED on the Nix+KVM box** (2026-06-06), including
   the 5 #7 git + 3 #8 CLAUDEMD assertions, with `nix flake check` clean. #12 adds **no** boot
   assertion yet (needs a persist-enabled `boot.nix` variant + a host-write check — see #12).
-- **Baked `@TOKENS@` now number 19** (added `@CLAUDEMD@` #8, `@PERSISTPROJECTS@` #12). The
-  token list and value list in BOTH `lib/mkccvm.nix` and `tests/default.nix` must stay balanced
-  at 19 — verify with the awk one-liners (a mismatch silently mis-bakes the wrapper).
+- **Baked `@TOKENS@` now number 20** (added `@CLAUDEMD@` #8, `@PERSISTPROJECTS@` #12,
+  `@VERSION@` #6). The token list and value list in BOTH `lib/mkccvm.nix` and
+  `tests/default.nix` must stay balanced at 20 — verify with the awk one-liners (a mismatch
+  silently mis-bakes the wrapper).
 - **#5 placeholder half resolved:** `jx-wi` is the user's real GitHub handle — no substitution
   needed; repo will live at `github.com/jx-wi/ccvm`. The git REMOTE is still unconfigured.
 - **RENAME (done, `c0c5e97`):** `shareHostConfig` → `shareClaudeConfig` everywhere (option, env
@@ -67,7 +72,8 @@ CTX=$(mktemp); printf 'CCVM-CONTEXT-MARKER baked blurb body\n' > "$CTX"   # @CLA
       -e 's#@MODE@#rw#g' -e 's#@APIKEYVAR@#ANTHROPIC_API_KEY#g' -e 's#@SHARECLAUDE@#1#g' \
       -e 's#@PERSISTPROJECTS@#0#g' -e 's#@SHAREGIT@#1#g' -e "s#@CLAUDEMD@#$CTX#g" \
       -e 's#@MOUNTHOSTSTORE@#0#g' -e 's#@HOSTSTOREPATH@#/nix/store#g' -e 's#@QEMU@#true#g' \
-      -e 's#@DEFAULTMACHINE@#microvm#g' -e 's#@MEMLOCK@#0#g' wrapper/ccvm.sh
+      -e 's#@DEFAULTMACHINE@#microvm#g' -e 's#@MEMLOCK@#0#g' -e 's#@VERSION@#0.0.0-test#g' \
+      wrapper/ccvm.sh
 } > "$WRAP"; chmod +x "$WRAP"
 CCVM="$WRAP" bash tests/host.sh        # add -e 's#@EGRESSALLOW@##g' -e 's#@EGRESSPORTS@#443#g' on the egress branch
 ```
@@ -214,11 +220,21 @@ so far are local-only.
 
 ---
 
-## 6. 🟡 Smaller polish — LOW (3 of 4 done; only `--ccvm-help`/`--version` + dedup left)
+## 6. 🟡 Smaller polish — LOW (3 of 4 done; only the defaults-dedup left)
 
-- ⬜ `ccvm --ccvm-help` / `--version`: ccvm's own flags (`--shell`, `--ccvm-debug`,
-  `--auto-update-files`, `--no-auto-update-files`) are undiscoverable — `--help` forwards to
-  claude's help.
+- ✅ **`ccvm --ccvm-help` / `--ccvm-version` — DONE.** ccvm's own flags were undiscoverable
+  (`--help`/`--version` forward to claude). Added `--ccvm-help` (prints ccvm's flags + the
+  `CCVM_*` env knobs) and `--ccvm-version` (prints the baked version). Deliberately
+  `--ccvm-`-namespaced so bare `--help`/`--version` still pass through to claude — transparent
+  passthrough preserved. Both short-circuit before any VM work (no scratch dir/keys/boot).
+  Version baked via a new `@VERSION@` token from `version = "0.1.0"` in `lib/mkccvm.nix`
+  (token lists now **20/20** in `mkccvm.nix` + `tests/default.nix`). Files: `wrapper/ccvm.sh`
+  (baked `VERSION`, `ccvm_help()`, interception + short-circuit), `lib/mkccvm.nix`,
+  `tests/default.nix`, `tests/host.sh` §11 (3 assertions: `--ccvm-version` echoes the baked
+  string; `--ccvm-help` prints usage+flags; bare `--version` is forwarded), README + CLAUDE.md.
+  **Verified here:** `bash -n` clean; `host.sh` **39/39** via the dry-run recipe (recipe below
+  now substitutes `@VERSION@`). **Unverified here:** `nix flake check` (Nix eval / 20-token
+  balance) — confirm green on the Nix box.
 - ✅ **Longer `wait_for_boot` timeout under TCG — DONE.** `wait_for_boot` now scales its cap
   by accel: KVM keeps the snappy 120×0.3s (~36 s), TCG gets 600×0.3s (~180 s); `CCVM_BOOT_TRIES`
   overrides. This was a real silent-failure source: a cold TCG boot on a busy box exceeded the
@@ -447,7 +463,9 @@ project's slug instead of all of `projects/` if exposing all history to in-VM wr
 
 - **No git remote yet** (#5): every commit is local-only; `main` is the only branch (the
   `egress-allowlist` branch was merged and deleted).
-- **#12 is the one uncommitted thing** — verify it on the Nix+KVM box (see #12), then commit.
+- **Everything through #12 is committed.** Open work items left: **#5** (jx-wi/remote — mostly
+  your action), **#6 defaults-dedup** (LOW), **#7 push/export HTTPS doc** (LOW), **#10 FDE**
+  (design only). Nothing is mid-flight on the working tree.
 - **Commit trailer:** `Co-authored-by: Claude <noreply@anthropic.com>` (exact form; see CLAUDE.md).
 - **Recently done, not a blocker:** `CCVM_MEMORY=<MiB>` per-run guest-RAM override (wrapper + docs
   + `host.sh` tests). The `memory` home-manager option already existed (default 4096); the new bit

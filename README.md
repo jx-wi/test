@@ -137,6 +137,8 @@ Those `ccvm` flags are intercepted by the wrapper and are **not** forwarded to c
 | `CCVM_DEBUG=1` / `ccvm --ccvm-debug` | Stream the guest console while booting; keep the scratch dir on exit. |
 | `CCVM_ACCEL=tcg` | Force software emulation (for hosts where `/dev/kvm` exists but is broken). |
 | `CCVM_MACHINE=q35` | Use the q35 machine type instead of the default `microvm`. |
+| `ccvm --ccvm-help` | List ccvm's own flags + env knobs and exit (bare `--help` still forwards to claude). |
+| `ccvm --ccvm-version` | Print the ccvm version and exit (bare `--version` still forwards to claude). |
 
 ### Locking guest memory (`lockGuestMemory` / `CCVM_MLOCK`)
 
