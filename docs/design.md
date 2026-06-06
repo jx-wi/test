@@ -228,8 +228,10 @@ true` would otherwise break every in-VM commit). The guest's seed service lays t
 `~/.config/git/config`/`ignore`, owned by the (uid-remapped) agent user. Only non-secret
 config is ever written to the seed — the same invariant as the API key and the OAuth
 credential, and it is checked the same way (a host-side test greps the seed). The deliberate
-gap: `git push` to an SSH remote still can't authenticate in the VM, because the credential to
-do so is exactly what we refuse to carry — in overlay mode you export from the host instead.
+gap: `git push` still can't authenticate in the VM, because the credential to do so is exactly
+what we refuse to carry — and we deliberately keep it that way rather than smuggle a token in.
+Pushing is a host-side action: in the default rw mode the agent's commits are already in the
+host repo (push from a host terminal); in overlay mode you export from the host instead.
 
 **Context injection (`extraClaudeMd`).** The agent behaves better when it *knows* it's inside
 ccvm — it can be more autonomous in a disposable sandbox, it should understand that nothing

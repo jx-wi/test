@@ -184,9 +184,12 @@ helper, and those paths don't exist in the guest. So the wrapper resolves your c
   leftover `commit.gpgsign = true` would only break `git commit` inside the VM.
 
 The result: **`git commit` works as you out of the box.** Two honest consequences follow from
-*not* carrying credentials or keys: **`git push` to an SSH remote won't authenticate** inside
-the VM (there's no key to do it with — in overlay mode, export edits from the host side
-instead), and **commits aren't signed**. Settings that name a *bare* command (e.g.
+*not* carrying credentials or keys: **`git push` won't authenticate inside the VM** (there's no
+key to do it with), and **commits aren't signed**. Pushing is deliberately a host-side action —
+ccvm never carries a token or SSH key into the VM just to enable it. In the default **rw** mode
+that's seamless: the agent's commits land in your *host* repository live, so you just `git push`
+from a normal terminal on the host. In **overlay** mode the commits are inside the disposable
+VM, so export them from the host first (or switch to rw). Settings that name a *bare* command (e.g.
 `core.editor = nvim`) are kept as-is; if that program isn't in the guest, `git` falls back to
 its built-ins (the guest ships `vim` and `less`). Turn the whole thing off with
 `shareGitConfig = false` or `CCVM_SHARE_GIT_CONFIG=0`. Only non-secret config is ever staged —

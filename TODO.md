@@ -152,8 +152,9 @@ default-open** egress allowlist (design §3.10 MVP) + honest documentation of th
 
 **Verified GREEN on the host (pre-merge):** `nix flake check` and `bash tests/boot.sh` 7/7
 (allowlisted reachable + non-allowlisted blocked). Merged to `main` via `b461ca1`, conflicts
-reconciled (egress forked before #3/#4/#6). **TODO: re-run `nix flake check` + `bash tests/boot.sh`
-on merged `main`** — the guest now runs the uid remap and the egress firewall in one boot.
+reconciled (egress forked before #3/#4/#6). ✅ **Re-verified on merged `main`:** the later
+Nix+KVM runs under #8/#12 are on the merged tree — `nix flake check` clean + `bash tests/boot.sh`
+17/17 with the guest running the uid remap **and** the egress firewall in one boot.
 
 ---
 
@@ -267,7 +268,7 @@ No code change needed here.
 
 ---
 
-## 7. 🟡 git identity passthrough (DONE, `c0c5e97`) + the `git push` export story (still open)
+## 7. ✅ git identity passthrough (`c0c5e97`) + the `git push` export story — DONE
 
 **Done — `shareGitConfig` (default on):** the wrapper stages a SANITIZED copy of the host's
 GLOBAL git config into the seed (`seed/gitconfig`/`gitignore`); the guest seed service lays it
@@ -284,13 +285,18 @@ Files: `wrapper/ccvm.sh` (staging block), `guest/launcher.nix` (install), `lib/m
 the Nix+KVM box `nix flake check` clean + `bash tests/boot.sh` green (the 5 guest-side git
 assertions: config present, identity, sanitized, signing off, ignore present).
 
-**Still ⬜ — the push/export story:** `~/.ssh` is **deliberately** unshared, so `git push` to an
-SSH remote can't authenticate in the VM; the README now states this honestly (commit works,
-push doesn't; export from the host in overlay mode). Open: optionally document an HTTPS-token
-push path. Also `core.editor`/bare-command settings transfer as names (e.g. `nvim`) that may not
-exist in the guest — git falls back to its built-ins (guest ships `vim`/`less`); documented.
-Pairs with #8 (the default CLAUDE.md blurb is the natural place to tell the agent commits work
-but pushes don't).
+**✅ The push/export story — RESOLVED (push is host-side by design):** `~/.ssh` is
+**deliberately** unshared, so `git push` can't authenticate in the VM. The right model — which
+the docs now state plainly — is that **pushing is a host action**: in the default **rw** mode
+the agent's commits land in the *host* repo live, so you `git push` from a normal host terminal;
+in **overlay** mode you export from the host first. **Decision: the "HTTPS-token push path" idea
+is REJECTED, not deferred** — carrying a token (or key) into the VM purely to enable in-VM push
+would weaken the core "no credentials / `~/.ssh` ever cross the boundary" invariant for a
+capability the host already provides for free. So there is nothing left to build here.
+(`core.editor`/bare-command settings transfer as names like `nvim`; git falls back to its
+built-ins — guest ships `vim`/`less` — documented.) Docs updated for the rw-vs-overlay framing:
+README "git identity" section + design §3.7. Ties into #8 (the CLAUDE.md blurb already tells the
+agent commits work but pushes don't).
 
 ---
 
@@ -473,9 +479,10 @@ project's slug instead of all of `projects/` if exposing all history to in-VM wr
 
 - **No git remote yet** (#5): every commit is local-only; `main` is the only branch (the
   `egress-allowlist` branch was merged and deleted). The user adds the remote on the host.
-- **Everything through #12 is committed; #5 and #6 are now done.** Open work items left:
-  **#7 push/export HTTPS doc** (LOW) and **#10 FDE** (design only). Nothing is mid-flight on
-  the working tree.
+- **Everything through #12 is committed; #5, #6, #7 are now done.** The ONLY remaining item is
+  **#10 (FDE scratch disk), which is design-only by choice** (needs Nix+KVM to build; no code
+  intended yet). Optional nice-to-have: #12's persist-enabled `boot.nix` + guest-write
+  assertion. Nothing is mid-flight on the working tree.
 - **Commit trailer:** `Co-authored-by: Claude <noreply@anthropic.com>` (exact form; see CLAUDE.md).
 - **Recently done, not a blocker:** `CCVM_MEMORY=<MiB>` per-run guest-RAM override (wrapper + docs
   + `host.sh` tests). The `memory` home-manager option already existed (default 4096); the new bit
