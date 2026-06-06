@@ -171,11 +171,24 @@ if [[ $SHELL_MODE != 1 && $SHARECONFIG != 1 && -z ${!APIKEYVAR:-} ]]; then
 fi
 
 # mlock preflight: QEMU started with mem-lock=on aborts if it cannot lock the guest RAM, so
-# surface a clear hint early instead of a cryptic qemu failure when RLIMIT_MEMLOCK is too low.
+# surface a clear, loud hint early instead of a cryptic qemu failure when RLIMIT_MEMLOCK is
+# too low. The required lock is the guest RAM plus QEMU's own overhead, so even memlock ==
+# MEMORY is borderline; warn at any limit that is not comfortably above the guest size.
 if [[ $MEMLOCK == 1 ]]; then
   memlock_kib="$(ulimit -l)"
   if [[ $memlock_kib != unlimited ]] && ((memlock_kib < MEMORY * 1024)); then
-    warn "lockGuestMemory is on but RLIMIT_MEMLOCK is ${memlock_kib} KiB (< ${MEMORY} MiB guest) — QEMU may fail to start. Raise it (e.g. 'ulimit -l unlimited' or a higher systemd LimitMEMLOCK), or set CCVM_MLOCK=0 for this run."
+    warn "============================================================================"
+    warn "lockGuestMemory (mlock) is ON, but this shell's RLIMIT_MEMLOCK is too low:"
+    warn "    limit:       ${memlock_kib} KiB"
+    warn "    guest needs: $((MEMORY * 1024)) KiB (${MEMORY} MiB) + QEMU overhead"
+    warn "QEMU will almost certainly fail to start with 'mlock: Cannot allocate memory'."
+    warn "Fix it one of these ways:"
+    warn "  - this shell only:   ulimit -l unlimited   (then re-run ccvm)"
+    warn "  - systemd user units: set LimitMEMLOCK=infinity"
+    warn "  - PAM/limits.conf:   add '<user> - memlock unlimited' (then re-login)"
+    warn "  - skip locking once: CCVM_MLOCK=0 ccvm ...   (RAM may reach host swap)"
+    warn "See README 'Locking guest memory' for details."
+    warn "============================================================================"
   fi
 fi
 

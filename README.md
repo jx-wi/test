@@ -129,6 +129,33 @@ Those `ccvm` flags are intercepted by the wrapper and are **not** forwarded to c
 | `CCVM_ACCEL=tcg` | Force software emulation (for hosts where `/dev/kvm` exists but is broken). |
 | `CCVM_MACHINE=q35` | Use the q35 machine type instead of the default `microvm`. |
 
+### Locking guest memory (`lockGuestMemory` / `CCVM_MLOCK`)
+
+Everything secret in the VM lives in guest RAM — the API key in the launcher's environment,
+any `/login` credentials in the guest tmpfs. That RAM is ordinary host process memory, so a
+memory-pressured host kernel *could* page it out to swap (and your swap may be
+unencrypted). Turning this on starts QEMU with `-overcommit mem-lock=on`, which `mlock`s the
+guest so it can never reach swap. This — not full-disk encryption, which is moot when there
+is no persistent disk — is the relevant at-rest protection for an all-RAM VM. It is **off by
+default** because it requires a raised memory-lock limit.
+
+**`mlock` needs `RLIMIT_MEMLOCK` ≥ the guest RAM (plus QEMU's overhead).** Many Linux setups
+ship a tiny default (often 8 MiB / `8192` KiB), far below the default `memory = 4096` MiB
+guest, so QEMU aborts at startup with `mlock: Cannot allocate memory`. Check yours with
+`ulimit -l` (`unlimited`, or KiB). Raise it before enabling:
+
+| Where | Fix |
+|---|---|
+| Current shell only | `ulimit -l unlimited`, then re-run `ccvm` |
+| systemd user services | set `LimitMEMLOCK=infinity` in the unit / drop-in |
+| System-wide (PAM) | add `<user> - memlock unlimited` to `/etc/security/limits.conf` (or a `limits.d` file), then re-login |
+| NixOS | `security.pam.loginLimits = [ { domain = "*"; type = "-"; item = "memlock"; value = "unlimited"; } ];` |
+
+If you can't or don't want to raise the limit, leave `lockGuestMemory` off (the default) or
+pass `CCVM_MLOCK=0` for a single run — guest RAM may then reach host swap, the only
+trade-off. The wrapper runs a preflight check and prints a loud warning (with these same
+fixes) when the limit looks too low.
+
 ---
 
 ## How it works (the short version)
