@@ -116,6 +116,15 @@ grep -qa '^GITSIGN:false$' <<<"$OUT" &&
   no "git: signing not disabled: $(grep -a '^GITSIGN:' <<<"$OUT")"
 grep -qa '^GIT:ignore-present$' <<<"$OUT" &&
   ok "git: global ignore staged to the guest's default path" || no "git: global ignore missing"
+# extraClaudeMd: the ccvm-context global memory reached the guest as ~/.claude/CLAUDE.md, with
+# the baked blurb and the rw-mode "edits are live" note (so the agent knows where it is).
+grep -qa '^CLAUDEMD:present$' <<<"$OUT" &&
+  ok "claude-md: ccvm-context laid at the guest's ~/.claude/CLAUDE.md" ||
+  no "claude-md: not present in the guest"
+grep -qa '^CLAUDEMD:blurb$' <<<"$OUT" &&
+  ok "claude-md: the ccvm-context blurb survived into the guest" || no "claude-md: blurb missing"
+grep -qa '^CLAUDEMD:mode-rw$' <<<"$OUT" &&
+  ok "claude-md: rw-mode 'edits are live' note present in the guest" || no "claude-md: rw mode note missing"
 rm -rf "$PROJ_RW"
 
 # ---- overlay (--no-auto-update-files): the write stays in the VM -----------

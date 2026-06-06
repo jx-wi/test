@@ -17,6 +17,16 @@ fi
 [ -r "$HOME/.claude/settings.json" ] && echo "CONFIG:settings-readable"
 [ -e "$HOME/.claude/.credentials.json" ] && echo "CONFIG:credential-present"
 
+# ccvm-context global memory (extraClaudeMd): should be laid at ~/.claude/CLAUDE.md, carrying
+# the baked blurb and the runtime mode line. Report so boot.sh can assert it survived a boot.
+if [ -r "$HOME/.claude/CLAUDE.md" ]; then
+  echo "CLAUDEMD:present"
+  grep -q 'inside .*ccvm' "$HOME/.claude/CLAUDE.md" 2>/dev/null && echo "CLAUDEMD:blurb"
+  grep -q 'LIVE to the host' "$HOME/.claude/CLAUDE.md" 2>/dev/null && echo "CLAUDEMD:mode-rw"
+else
+  echo "CLAUDEMD:absent"
+fi
+
 # Git config passthrough (shareGitConfig): the guest should see the host identity, with the
 # host-only /nix/store tool paths and credentials stripped and signing disabled. Report what
 # actually landed so boot.sh can assert the sanitization survived a real boot.

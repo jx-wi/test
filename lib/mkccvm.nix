@@ -27,6 +27,13 @@ let
     # SANITIZED copy of the global git config — host-only /nix/store tool paths and credentials
     # are stripped — so nothing secret crosses and nothing dangles. Per-run: CCVM_SHARE_GIT_CONFIG.
     shareGitConfig = true;
+    # Context injected as the guest's ~/.claude/CLAUDE.md (global memory) so the agent knows it
+    # is running inside ccvm — ephemeral, sandboxed, only the project dir shared — and adapts
+    # (more autonomous; commits work but pushes don't). Staged via the seed, NOT a claude flag,
+    # so transparent passthrough is preserved. The wrapper prepends a runtime-accurate line
+    # about the current file-sharing mode (rw = live host edits / overlay = discarded on exit).
+    # Set to "" to inject nothing. Per-run override: CCVM_CLAUDE_MD=<file> (empty disables).
+    extraClaudeMd = builtins.readFile ../lib/ccvm-context.md;
     lockGuestMemory = false;
     # Egress allowlist (opt-in). Empty list = open egress (the native default — npm/pip/git
     # clone/WebFetch all work like native claude). A non-empty list switches the guest to a
@@ -83,6 +90,11 @@ let
   # Kernel cmdline for direct boot. init= points into the (now mounted) read-only store.
   append = lib.concatStringsSep " " (gc.boot.kernelParams ++ [ "init=${toplevel}/init" ]);
 
+  # The ccvm-context CLAUDE.md baked to a store file; the wrapper copies it into the seed and
+  # the guest lays it at ~/.claude/CLAUDE.md. Empty extraClaudeMd => bake an empty path so the
+  # wrapper stages nothing (injection disabled).
+  claudeMdFile = if config.extraClaudeMd == "" then "" else "${pkgs.writeText "ccvm-context.md" config.extraClaudeMd}";
+
   # Package metadata. Surfaced on the wrapper derivation (so `nix search` / `nix run` see a
   # description and the right binary) and reused by the flake's `apps` outputs to silence the
   # `nix flake check` "lacks attribute 'meta'" warnings. `mainProgram` matches the /bin name.
@@ -111,6 +123,7 @@ let
         "@APIKEYVAR@"
         "@SHARECLAUDE@"
         "@SHAREGIT@"
+        "@CLAUDEMD@"
         "@MOUNTHOSTSTORE@"
         "@HOSTSTOREPATH@"
         "@QEMU@"
@@ -130,6 +143,7 @@ let
         config.apiKeyVariable
         (if config.shareClaudeConfig then "1" else "0")
         (if config.shareGitConfig then "1" else "0")
+        claudeMdFile
         (if config.mountHostNixStore then "1" else "0")
         (builtins.storeDir)
         qemuBin

@@ -29,6 +29,7 @@ let
           "@APIKEYVAR@"
           "@SHARECLAUDE@"
           "@SHAREGIT@"
+          "@CLAUDEMD@"
           "@MOUNTHOSTSTORE@"
           "@HOSTSTOREPATH@"
           "@QEMU@"
@@ -48,6 +49,10 @@ let
           "ANTHROPIC_API_KEY" # APIKEYVAR
           "1" # SHARECLAUDE    (production default: shareClaudeConfig=true)
           "1" # SHAREGIT       (production default: shareGitConfig=true)
+          # CLAUDEMD: a fixture context file so the staging block has something to read; host.sh
+          # asserts its marker + the runtime mode line reach seed/claude-md (production bakes the
+          # real lib/ccvm-context.md).
+          "${pkgs.writeText "ccvm-test-context.md" "CCVM-CONTEXT-MARKER baked blurb body\n"}"
           "0" # MOUNTHOSTSTORE
           "/nix/store" # HOSTSTOREPATH
           "true" # QEMU        (never invoked under dry run)

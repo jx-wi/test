@@ -33,10 +33,11 @@ half-remembered context.
 - **Branch `egress-allowlist`:** merged and **deleted** (2026-06-06, was `1f394b4`). Only
   `main` remains.
 - **No git remote** is configured: every merge so far is local-only (see #5).
-- **`host.sh` = 26 assertions** (15 base + 2 uid/gid #4 + 1 egress default-open #2 + 8 git
-  passthrough #7); `egress.sh` = 6. Verified host-side via the dry-run recipe (26/26 green here).
-- **`boot.sh` = 14 assertions** (incl. 5 new #7 git: config present/identity/sanitized/
-  signing-off/ignore-present) — **VERIFIED GREEN 14/14 on the Nix+KVM box** (2026-06-06).
+- **`host.sh` = 31 assertions** (15 base + 2 uid/gid #4 + 1 egress default-open #2 + 8 git
+  passthrough #7 + 5 extraClaudeMd #8); `egress.sh` = 6. Verified host-side via the dry-run
+  recipe (31/31 green here).
+- **`boot.sh` = 17 assertions** (incl. 5 #7 git + 3 #8 CLAUDEMD: present/blurb/mode-rw) —
+  14/14 was verified on the Nix+KVM box pre-#8; the 3 new #8 assertions need a re-run there.
 - **Commit `c0c5e97` (#7 + the shareClaudeConfig rename) is fully done to the definition of
   done:** `host.sh` 26/26 (host-side dry-run) + `boot.sh` 14/14 (real VM) + `nix flake check`
   green on the host (only the known cosmetic warnings: missing `meta` per #6, the
@@ -63,11 +64,12 @@ result — this is how every host-side change in this list was verified:
 
 ```sh
 WRAP=$(mktemp -d)/ccvm
+CTX=$(mktemp); printf 'CCVM-CONTEXT-MARKER baked blurb body\n' > "$CTX"   # @CLAUDEMD@ fixture (#8)
 { printf '#!/usr/bin/env bash\nset -euo pipefail\n'
   sed -e 's#@KERNEL@#/dev/null#g' -e 's#@INITRD@#/dev/null#g' -e 's#@STOREIMG@#/dev/null#g' \
       -e 's#@APPEND@#console=ttyS0#g' -e 's#@MEMORY@#4096#g' -e 's#@CORES@#4#g' \
       -e 's#@MODE@#rw#g' -e 's#@APIKEYVAR@#ANTHROPIC_API_KEY#g' -e 's#@SHARECLAUDE@#1#g' \
-      -e 's#@SHAREGIT@#1#g' \
+      -e 's#@SHAREGIT@#1#g' -e "s#@CLAUDEMD@#$CTX#g" \
       -e 's#@MOUNTHOSTSTORE@#0#g' -e 's#@HOSTSTOREPATH@#/nix/store#g' -e 's#@QEMU@#true#g' \
       -e 's#@DEFAULTMACHINE@#microvm#g' -e 's#@MEMLOCK@#0#g' wrapper/ccvm.sh
 } > "$WRAP"; chmod +x "$WRAP"
@@ -273,26 +275,40 @@ but pushes don't).
 
 ---
 
-## 8. ⬜ `extraClaudeMd` / `extraContext` option — NEW
+## 8. ✅ `extraClaudeMd` / `extraContext` option — DONE (host-verified; needs Nix+KVM boot pass)
 
-A `programs.ccvm.*` string injected into the guest so the agent knows it's running inside ccvm
-(ephemeral isolation) and adapts behaviour — e.g. git-commit guidance, knowing overlay edits are
-ephemeral, that it can be more autonomous because it's sandboxed.
+A `programs.ccvm.extraClaudeMd` (lines) staged as the guest's `~/.claude/CLAUDE.md` so the agent
+knows it's inside ccvm (ephemeral, sandboxed, only the project dir shared) and adapts — more
+autonomous, knows overlay edits are ephemeral, knows `git commit` works but `git push` doesn't
+(ties into #7).
 
-**Design note:** prefer staging it as the guest's `~/.claude/CLAUDE.md` (global memory) **via the
-seed** over injecting a `--append-system-prompt` flag — that keeps the transparent-passthrough
-invariant intact (the wrapper still adds no flags to claude's argv). Ship a sensible default
-blurb, user-extendable. Interacts with #7.
+**Design honored:** delivered **via the seed + config overlay, never `--append-system-prompt`**,
+so transparent passthrough holds (wrapper still adds zero flags to claude's argv). Default-on
+with a sensible built-in blurb (`lib/ccvm-context.md`, read by BOTH `mkccvm.nix` defaults and the
+home-manager option default → no string duplication / drift); `extraClaudeMd = ""` disables.
 
-Example intent:
+**Done:**
+- Default blurb in `lib/ccvm-context.md`. `mkccvm.nix`: `extraClaudeMd` default + `claudeMdFile`
+  (baked to a store file, empty string when disabled) + new `@CLAUDEMD@` token. `home-manager.nix`:
+  `extraClaudeMd` option (type `lines`) + inherit.
+- `wrapper/ccvm.sh`: baked `CLAUDEMD`, runtime override `CCVM_CLAUDE_MD=<file>` (set-empty
+  disables, via `+x`), and a staging block that **prepends a runtime-accurate mode line** (rw =
+  edits LIVE on host / overlay = edits DISCARDED on exit — the build-time file can't know the
+  per-run mode) then the blurb → `seed/claude-md`.
+- `guest/launcher.nix`: lays `seed/claude-md` at `~/.claude/CLAUDE.md`, **appending** to any
+  host-shared one (copy-up into the overlay upper; host file never touched), owned by the
+  remapped agent user.
+- Tests: `host.sh` §9 (staged / blurb present / rw-LIVE line / overlay-DISCARDED line / opt-out
+  stages nothing); `tests/default.nix` `@CLAUDEMD@` fixture token; `stub-claude.sh` reports
+  `CLAUDEMD:present|blurb|mode-rw`; `boot.sh` asserts those in the rw scenario. README
+  ("Telling the agent it's in ccvm" + option/env rows), design §3.7, CLAUDE.md (deliberate
+  default bullet).
 
-```nix
-programs.ccvm.extraClaudeMd = ''
-  You are running inside `ccvm`, an ephemeral isolation microVM. Edits to the project are
-  <live on the host | discarded on exit>, and there is no persistent disk. When you make git
-  commits, <do xyz — e.g. note the ccvm provenance / skip signing>.
-'';
-```
+**Verified here:** `bash -n` clean (wrapper + all test scripts); `host.sh` **31/31** via the
+dry-run recipe (the 5 new §9 included); eyeballed the staged `seed/claude-md` (mode line prepended,
+then blurb). **Unverified here** (needs Nix+KVM): `nix flake check` (guest eval + the new
+`@CLAUDEMD@` token balance) and `bash tests/boot.sh` (the 3 new guest-side CLAUDEMD assertions
+under a real boot).
 
 ---
 

@@ -234,6 +234,25 @@ let
         install -D -m 644 -o ccvm -g users "$seed/gitignore" /home/ccvm/.config/git/ignore
       fi
 
+      # ccvm-context global memory (extraClaudeMd): tell the agent it is inside ccvm. Laid at
+      # ~/.claude/CLAUDE.md owned by the (remapped) agent user. If shareClaudeConfig brought a
+      # host CLAUDE.md (a real file on the 9p lower, or one staged into the overlay upper by the
+      # config-deref loop above), APPEND to it rather than clobber the user's global memory —
+      # writing the combined file copies-up into the overlay's tmpfs upper, so the host file is
+      # never touched. Runs AFTER the shareClaudeConfig block so $dst reflects the host content.
+      if [ -f "$seed/claude-md" ]; then
+        install -d -m 700 -o ccvm -g users /home/ccvm/.claude
+        dst=/home/ccvm/.claude/CLAUDE.md
+        tmp=/home/ccvm/.claude/.CLAUDE.md.ccvm
+        if [ -f "$dst" ]; then
+          { cat "$dst"; printf '\n'; cat "$seed/claude-md"; } >"$tmp"
+        else
+          cat "$seed/claude-md" >"$tmp"
+        fi
+        install -m 644 -o ccvm -g users "$tmp" "$dst"
+        rm -f "$tmp"
+      fi
+
       # An `if` (not a trailing `[ -f … ] && …`): under `set -e` a bare conditional as the
       # script's final statement makes the whole oneshot exit non-zero when the file is
       # absent — the common case — which would fail ccvm-seed.service and block sshd.

@@ -53,6 +53,11 @@ These are the whole point of the project. Treat any change that weakens one as a
   with your aliases/ignores) make ccvm behave like native `claude`. Isolation (read-only
   project, no config) is the **opt-in**. Do not re-propose "secure by default" — that was the
   original spec and was deliberately reversed.
+- **`extraClaudeMd` is default-on context, not a flag.** A built-in blurb is staged as the
+  guest's `~/.claude/CLAUDE.md` (via the seed, **appended** to any host-shared one — never
+  clobbering it) so the agent knows it's in ccvm. It must stay seed-delivered, never become
+  `--append-system-prompt`, or it breaks transparent passthrough. The wrapper prepends a
+  **runtime** mode line (rw=live / overlay=discarded) the build-time file can't know.
 - **Transparent passthrough.** The wrapper injects **no** flags. Everything after `ccvm`
   is forwarded to `claude` verbatim, including `--dangerously-skip-permissions` (opt-in by
   the user, never auto-added). The *only* args the wrapper consumes (and does **not**

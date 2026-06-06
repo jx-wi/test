@@ -21,6 +21,7 @@ CORES="@CORES@"
 APIKEYVAR="@APIKEYVAR@"
 SHARECLAUDE="@SHARECLAUDE@"
 SHAREGIT="@SHAREGIT@" # 1 = stage a sanitized host git config into the guest; 0 = off
+CLAUDEMD="@CLAUDEMD@" # path to the baked ccvm-context CLAUDE.md (empty = inject nothing)
 MOUNTHOSTSTORE="@MOUNTHOSTSTORE@"
 HOSTSTOREPATH="@HOSTSTOREPATH@"
 MODE="@MODE@" # rw (autoUpdateFiles=true, default — mirrors native claude) | overlay (secure)
@@ -197,6 +198,11 @@ case "${CCVM_SHARE_GIT_CONFIG:-}" in
   1 | true | yes) SHAREGIT=1 ;;
   0 | false | no) SHAREGIT=0 ;;
 esac
+
+# ccvm-context CLAUDE.md precedence: CCVM_CLAUDE_MD, if SET (even to empty), overrides the baked
+# default file for one run — a path names an alternate context file; empty disables injection.
+# `+x` distinguishes "set empty" (disable) from "unset" (use the baked @CLAUDEMD@).
+[[ -n ${CCVM_CLAUDE_MD+x} ]] && CLAUDEMD="$CCVM_CLAUDE_MD"
 
 # Guest-memory locking precedence: CCVM_MLOCK overrides the baked lockGuestMemory default for
 # one run, same override pattern as the toggles above.
@@ -424,6 +430,24 @@ if [[ $SHAREGIT == 1 ]] && command -v git >/dev/null 2>&1 &&
     exreal="$(readlink -f "$ex" 2>/dev/null || true)"
     [[ -n $exreal && -r $exreal ]] && cp -L "$exreal" "$SEED/gitignore"
   fi
+fi
+
+# ---- ccvm-context CLAUDE.md (default on) -----------------------------------
+# Stage the agent-facing "you are inside ccvm" global memory into the seed; the guest lays it
+# at ~/.claude/CLAUDE.md (appending to any host-shared one). Staged via the seed — never a
+# claude flag — so transparent passthrough holds. We PREPEND a runtime-accurate note about the
+# current file-sharing mode, which the build-time-baked file cannot know (mode is resolved per
+# run via flags / CCVM_AUTOUPDATE). Empty CLAUDEMD (extraClaudeMd="" or CCVM_CLAUDE_MD=) => skip.
+if [[ -n $CLAUDEMD && -r $CLAUDEMD ]]; then
+  {
+    printf '# ccvm session\n\n'
+    if [[ $MODE == rw ]]; then
+      printf 'File edits in the project directory are written LIVE to the host filesystem (autoUpdateFiles=true) — treat changes here as real edits to the user'\''s working tree.\n\n'
+    else
+      printf 'File edits are kept in an ephemeral overlay and are DISCARDED when the VM exits — they do NOT reach the host (autoUpdateFiles=false). Anything worth keeping must be exported before exit (e.g. committed and pushed, or copied out by the user).\n\n'
+    fi
+    cat "$CLAUDEMD"
+  } >"$SEED/claude-md"
 fi
 
 # ---- egress allowlist (opt-in) --------------------------------------------

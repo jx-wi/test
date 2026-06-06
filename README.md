@@ -114,6 +114,7 @@ Those `ccvm` flags are intercepted by the wrapper and are **not** forwarded to c
 | `apiKeyVariable` | `"ANTHROPIC_API_KEY"` | Host env var carrying the key; passed only via SSH `SendEnv`. |
 | `shareClaudeConfig` | `true` | Mount the host `~/.claude` (ro) so the VM reuses your login, settings, commands and memory (home-manager symlinks are dereferenced); writes stay ephemeral. Per-run: `CCVM_SHARE_CLAUDE_CONFIG=0\|1`. |
 | `shareGitConfig` | `true` | Stage a **sanitized** copy of your global git config into the VM (`~/.config/git/config`) so in-VM `git` commits as you, with your aliases and global ignores. Host-only `/nix/store` tool paths (editor/pager/delta/gh helper), all `credential.*`, and commit signing are stripped — nothing secret crosses, nothing dangles. See [Git config in the VM](#git-config-in-the-vm). Per-run: `CCVM_SHARE_GIT_CONFIG=0\|1`. |
+| `extraClaudeMd` | *(built-in blurb)* | Markdown staged as the guest's `~/.claude/CLAUDE.md` so the agent knows it's inside ccvm (ephemeral, sandboxed, only the project dir shared) and adapts. Appended to any host-shared `CLAUDE.md`; the wrapper prepends a runtime note about the file-sharing mode. Set `""` to disable, or replace with your own. See [Telling the agent it's in ccvm](#telling-the-agent-its-in-ccvm). Per-run: `CCVM_CLAUDE_MD=<file>`. |
 | `lockGuestMemory` | `false` | mlock the guest RAM (QEMU `mem-lock=on`) so it can't be paged to the host's (possibly unencrypted) swap — keeps in-VM secrets off persistent storage. Needs sufficient `RLIMIT_MEMLOCK`. Per-run: `CCVM_MLOCK=0\|1`. |
 | `egressAllowlist` | `[ ]` | **Opt-in.** Empty = open egress (native default). Non-empty switches the guest to a default-deny egress firewall allowing only these FQDN/IP/CIDR destinations (`api.anthropic.com` auto-included) — closes the *direct* exfiltration channel (DNS-to-stub-resolver stays open as a residual channel). See [Threat model & network egress](#threat-model--network-egress). |
 | `egressPorts` | `[ 443 ]` | Destination ports the allowlist permits (only when `egressAllowlist` is set). Add `80` for plain-HTTP mirrors. |
@@ -127,6 +128,7 @@ Those `ccvm` flags are intercepted by the wrapper and are **not** forwarded to c
 | `CCVM_AUTOUPDATE=1\|0` | Override the file-sharing mode for one run. |
 | `CCVM_SHARE_CLAUDE_CONFIG=1\|0` | Override host `~/.claude` sharing for one run (wins over the baked `shareClaudeConfig`). |
 | `CCVM_SHARE_GIT_CONFIG=1\|0` | Override git-config staging for one run (wins over the baked `shareGitConfig`). |
+| `CCVM_CLAUDE_MD=<file>` | Use an alternate ccvm-context file for one run (wins over the baked `extraClaudeMd`); set it **empty** to inject nothing. |
 | `CCVM_MLOCK=1\|0` | Lock (or unlock) the guest RAM for one run (overrides the baked `lockGuestMemory`). |
 | `CCVM_MEMORY=<MiB>` | Override the guest RAM (MiB) for one run, no rebuild — e.g. `CCVM_MEMORY=16384` for a big dependency closure. |
 | `CCVM_SHELL=1` / `ccvm --shell` | Drop into a debug **zsh** in the guest instead of claude. |
@@ -185,6 +187,22 @@ instead), and **commits aren't signed**. Settings that name a *bare* command (e.
 its built-ins (the guest ships `vim` and `less`). Turn the whole thing off with
 `shareGitConfig = false` or `CCVM_SHARE_GIT_CONFIG=0`. Only non-secret config is ever staged —
 never the API key, never a credential.
+
+### Telling the agent it's in ccvm (`extraClaudeMd` / `CCVM_CLAUDE_MD`)
+
+By default ccvm stages a short Markdown blurb as the guest's `~/.claude/CLAUDE.md` (global
+memory) so the agent **knows it's running inside ccvm** and behaves accordingly: nothing
+persists, only the project directory is shared, it can be more autonomous because the sandbox
+is disposable, and `git commit` works but `git push` to an SSH remote won't (no key). The
+wrapper also **prepends a line that reflects the current file-sharing mode** — in `rw` mode it
+says edits are live on the host; in overlay mode it warns edits are discarded on exit — which
+the build-time blurb can't know on its own.
+
+It rides the **read-only seed** and is laid over the config overlay, never passed as a `claude`
+flag, so ccvm's transparent passthrough is untouched. When `shareClaudeConfig` brings your host
+`~/.claude/CLAUDE.md`, the ccvm blurb is **appended** to it (your global memory is preserved;
+the host file is never modified). Replace it with your own text via `extraClaudeMd = "…"`, or
+turn it off entirely with `extraClaudeMd = ""` (or `CCVM_CLAUDE_MD=` for one run).
 
 ---
 

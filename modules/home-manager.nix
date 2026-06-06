@@ -10,7 +10,7 @@ let
   ccvmPkg = (mkCcvm {
     inherit (cfg)
       package autoUpdateFiles memory cores extraPackages mountHostNixStore
-      apiKeyVariable shareClaudeConfig shareGitConfig lockGuestMemory
+      apiKeyVariable shareClaudeConfig shareGitConfig extraClaudeMd lockGuestMemory
       egressAllowlist egressPorts extraGuestModules;
   }).wrapper;
 in
@@ -99,6 +99,24 @@ in
         break commits). The global core.excludesfile is staged by content to the VM's default
         ignore path. Commits work as you; pushing to an SSH remote still needs credentials the
         VM does not have (by design). false: stage nothing. Per-run: CCVM_SHARE_GIT_CONFIG=0|1.
+      '';
+    };
+
+    extraClaudeMd = lib.mkOption {
+      type = lib.types.lines;
+      default = builtins.readFile ../lib/ccvm-context.md;
+      defaultText = lib.literalExpression "builtins.readFile ../lib/ccvm-context.md";
+      description = ''
+        Markdown staged as the guest's ~/.claude/CLAUDE.md (global memory) so the agent knows
+        it is running inside ccvm — ephemeral, sandboxed, only the project directory shared —
+        and adapts (it can be more autonomous; commits work but `git push` to an SSH remote
+        does not). It is staged through the read-only seed and laid over the config overlay,
+        NOT passed as a claude flag, so ccvm's transparent-passthrough invariant holds. When
+        shareClaudeConfig brings a host ~/.claude/CLAUDE.md, this is APPENDED to it (the host
+        file is never modified). The wrapper also prepends a runtime-accurate note about the
+        current file-sharing mode (rw = edits are live on the host; overlay = edits are
+        discarded on exit). Defaults to a sensible built-in blurb; set to "" to inject nothing,
+        or replace it with your own. Per-run override: CCVM_CLAUDE_MD=<file> (empty disables).
       '';
     };
 

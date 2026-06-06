@@ -266,6 +266,37 @@ SEED="$(HOME="$GIT_HOME" XDG_CONFIG_HOME="$GIT_HOME/xdg" CCVM_SHARE_CLAUDE_CONFI
   ok "git: CCVM_SHARE_GIT_CONFIG=0 stages no git config" ||
   no "git: opt-out still staged a git config/ignore"
 
+# ===========================================================================
+# 9. extraClaudeMd: the ccvm-context global memory is staged into the seed, with
+#    a runtime-accurate file-sharing-mode line prepended; CCVM_CLAUDE_MD= opts out.
+# ===========================================================================
+# Default (rw) run: claude-md staged, carries the baked blurb AND the LIVE mode line.
+SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 run)/seed"
+CM="$SEED/claude-md"
+[[ -f "$CM" ]] && ok "claude-md: ccvm-context staged into the seed" ||
+  no "claude-md: not staged"
+grep -q 'CCVM-CONTEXT-MARKER' "$CM" 2>/dev/null &&
+  ok "claude-md: baked context blurb reaches the seed" ||
+  no "claude-md: baked blurb missing from the seed"
+grep -q 'LIVE to the host' "$CM" 2>/dev/null &&
+  ok "claude-md: rw mode prepends the LIVE-edits note" ||
+  no "claude-md: rw mode line missing"
+
+# Overlay run: the mode line must flip to the DISCARDED warning (and not claim LIVE).
+SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 run --no-auto-update-files)/seed"
+CM="$SEED/claude-md"
+if grep -q 'DISCARDED' "$CM" 2>/dev/null && ! grep -q 'LIVE to the host' "$CM" 2>/dev/null; then
+  ok "claude-md: overlay mode prepends the DISCARDED-edits warning"
+else
+  no "claude-md: overlay mode line wrong (should warn DISCARDED, not LIVE)"
+fi
+
+# Opt out: CCVM_CLAUDE_MD= (set empty) disables injection entirely.
+SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 CCVM_CLAUDE_MD= run)/seed"
+[[ ! -e "$SEED/claude-md" ]] &&
+  ok "claude-md: CCVM_CLAUDE_MD= stages no context" ||
+  no "claude-md: opt-out still staged a context file"
+
 # ---------------------------------------------------------------------------
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

@@ -231,6 +231,20 @@ credential, and it is checked the same way (a host-side test greps the seed). Th
 gap: `git push` to an SSH remote still can't authenticate in the VM, because the credential to
 do so is exactly what we refuse to carry — in overlay mode you export from the host instead.
 
+**Context injection (`extraClaudeMd`).** The agent behaves better when it *knows* it's inside
+ccvm — it can be more autonomous in a disposable sandbox, it should understand that nothing
+outside the project persists, and it needs to know that `git commit` works but `git push`
+doesn't. ccvm stages a short Markdown blurb (on by default, user-replaceable) as the guest's
+`~/.claude/CLAUDE.md` global memory. Two design choices matter here. First, it is delivered
+**through the seed and laid over the config overlay — not via `--append-system-prompt`** — so
+the transparent-passthrough invariant holds: the wrapper still adds zero flags to claude's
+argv (§4). Second, the blurb is baked at build time, but the *file-sharing mode* is only known
+per run (flags / `CCVM_AUTOUPDATE`), so the **wrapper prepends a runtime-accurate line** — "edits
+are live on the host" in `rw`, "edits are discarded on exit" in overlay — that the static file
+could not state correctly. When `shareClaudeConfig` brings the host's own `~/.claude/CLAUDE.md`,
+the guest **appends** rather than overwrites (the combined file copies-up into the overlay's
+tmpfs upper, so the host file is never touched), preserving the user's global memory.
+
 ### 3.8 The microvm.nix runtime-share trap
 
 It is tempting to declare the workspace 9p mount inside the guest NixOS config (or to use
