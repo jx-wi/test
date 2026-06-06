@@ -321,13 +321,21 @@ session itself ends.
 - `wrapper/ccvm.sh` — the host-side launcher (§4–5). Built with `writeShellApplication`,
   so it is shellcheck-clean by construction.
 - `modules/home-manager.nix` — `programs.ccvm.*` → installs the `ccvm` command.
+- `tests/` — `host.sh` (host-side guarantees via the `CCVM_DRYRUN` hook; wired into
+  `nix flake check` by `default.nix`) and `boot.sh`/`stub-claude.sh`/`boot.nix` (local
+  full-boot smoke test).
 
 ## 7. Known limitations
 
-- **Interactive fidelity is verified by a human.** Automated tests confirm the transport
-  (a real PTY, `TERM` propagation, verbatim argv, mount isolation, secret hygiene,
-  teardown), but resize/`vim`/`less`/vi-mode behaviour is a manual smoke test by nature —
-  see the README checklist.
+- **Coverage is layered (see `tests/`).** The host-side security invariants are checked in
+  CI by `tests/host.sh`, which drives the real wrapper through a dry-run hook (`CCVM_DRYRUN`:
+  populate the seed + run the config-staging loop, then stop before boot): the API key never
+  reaching the seed, the OAuth credential never being staged (top-level and nested), escaping
+  host-config symlinks being dereferenced, verbatim NUL-separated argv, and ccvm-flag
+  consumption + mode selection. `tests/boot.sh` boots a stub-`claude` VM locally to confirm
+  the argv reaches claude and that overlay vs. rw file visibility is correct. PTY/`TERM`
+  propagation, `SIGWINCH`/resize, and teardown are **not** auto-tested — interactive fidelity
+  is a human smoke test by nature (README checklist), and teardown is verified by inspection.
 - **aarch64-linux is best-effort.** It evaluates and is wired up, but the primary,
   CI-built target is x86_64-linux.
 - **`shareHostConfig` is read-only.** The in-VM Claude's writes to its config — including

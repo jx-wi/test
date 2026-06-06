@@ -49,6 +49,8 @@ cleanup() {
   if [[ -n ${TMP:-} ]]; then
     if [[ ${DEBUG:-0} == 1 ]]; then
       warn "debug mode — scratch dir kept at $TMP (contains logs + ephemeral keys)"
+    elif [[ ${DRYRUN:-0} == 1 ]]; then
+      : # dry run prints and keeps $TMP itself; leave it for the caller to inspect/remove.
     else
       rm -rf "$TMP"
     fi
@@ -104,6 +106,9 @@ wait_for_boot() {
 # through; ccvm's own debug is CCVM_DEBUG=1 or --ccvm-debug.)
 SHELL_MODE=0
 DEBUG="${CCVM_DEBUG:-0}"
+# Host-side test hook: populate the seed and assemble the QEMU args, then stop before
+# booting (see the dry-run block just before boot). Not a documented user flag.
+DRYRUN="${CCVM_DRYRUN:-0}"
 [[ ${CCVM_SHELL:-0} == 1 ]] && SHELL_MODE=1
 MODE_OVERRIDE=""
 FWD=()
@@ -321,6 +326,20 @@ QEMU_ARGS=(
 # environment, /login credentials in tmpfs) off host disk. Off by default; QEMU aborts at
 # startup if RLIMIT_MEMLOCK is too small (see the preflight warning above).
 [[ $MEMLOCK == 1 ]] && QEMU_ARGS+=(-overcommit mem-lock=on)
+
+# ---- dry run (host-side test hook) -----------------------------------------
+# CCVM_DRYRUN=1 performs every host-side step — generate keys, populate the seed, run the
+# real config-staging loop, assemble the QEMU args — then stops before booting QEMU and
+# prints the scratch dir. This is how the security-critical host guarantees are checked
+# automatically without a VM: that the API key and the OAuth credential never reach the
+# seed, that the forwarded argv round-trips verbatim, that the mode/share flags resolve
+# correctly, and that escaping host-config symlinks are staged. The scratch dir is kept
+# (the EXIT trap skips the rm under dry run) for the caller to grep, then remove.
+if [[ $DRYRUN == 1 ]]; then
+  printf '%s\n' "$TMP"
+  warn "dry-run: seed populated at $SEED; no VM booted. Scratch kept at $TMP."
+  exit 0
+fi
 
 # ---- boot ------------------------------------------------------------------
 # qemu runs headless in the background with stdio detached from the terminal so it never

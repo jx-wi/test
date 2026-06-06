@@ -17,6 +17,7 @@ cost time to rediscover.
 | `guest/launcher.nix` | Two units. `ccvm-seed.service` (root oneshot, `Before=sshd`) installs the pinned host key + `authorized_keys` and does every 9p/overlay mount. `ccvm-guest-launch` is the **unprivileged** sshd `ForceCommand` that just `cd`s to the workspace and execs claude (or zsh). |
 | `guest/sshd.nix` | Hardened sshd: key-only, no root, single `ForceCommand`. |
 | `modules/home-manager.nix` | `programs.ccvm.*` options → installs the command. |
+| `tests/` | `host.sh` (CI host-side guarantees via the `CCVM_DRYRUN` hook), `boot.sh`+`stub-claude.sh`+`boot.nix` (local full-boot smoke test), `default.nix` (wires `host.sh` into `nix flake check`). |
 
 ## Security invariants — MUST NOT regress
 
@@ -70,8 +71,14 @@ These are the whole point of the project. Treat any change that weakens one as a
 
   Boot it under `tcg`/`q35`, grep the output. This is exactly how `shareHostConfig` and
   `autoUpdateFiles` were verified end-to-end — much faster than booting the real agent.
-- `nix flake check` should pass. The `homeManagerModules`/`ccvmParts` "unknown flake
-  output" warnings are pre-existing and cosmetic.
+- `nix flake check` should pass. It builds the guest image, shellchecks the wrapper, and
+  runs `tests/host.sh` (the `checks.<sys>.host` derivation) — host-side secret hygiene,
+  config staging, verbatim argv, mode selection — against the real wrapper driven by its
+  `CCVM_DRYRUN` hook (no VM, no claude-code). The `homeManagerModules`/`ccvmParts` "unknown
+  flake output" warnings are pre-existing and cosmetic.
+- **Full-boot smoke test:** `bash tests/boot.sh` (defaults to `CCVM_ACCEL=tcg
+  CCVM_MACHINE=q35`) boots a stub-`claude` VM and asserts argv-reaches-claude and overlay
+  vs. rw file visibility. This is the codified version of the stub-package boot test below.
 - **Boot-testing without working KVM:** force software emulation with
   `CCVM_ACCEL=tcg CCVM_MACHINE=q35 ccvm` (slow but correct).
 - `CCVM_DEBUG=1` / `--ccvm-debug` streams the guest console and keeps the scratch dir.

@@ -47,12 +47,15 @@
           };
         });
 
-      # `nix flake check` builds the guest image and (via writeShellApplication)
-      # shellchecks the wrapper.
-      checks = forAllSystems (system: {
-        guest-image = partsAll.${system}.storeImage;
-        wrapper = partsAll.${system}.wrapper;
-      });
+      # `nix flake check` builds the guest image, shellchecks the wrapper (via
+      # writeShellApplication), and runs the host-side guarantee tests (secret hygiene,
+      # config staging, verbatim argv, mode selection) against the real wrapper script
+      # driven by its dry-run hook — see tests/.
+      checks = forAllSystems (system:
+        let pkgs = pkgsFor system; in {
+          guest-image = partsAll.${system}.storeImage;
+          wrapper = partsAll.${system}.wrapper;
+        } // (import ./tests { inherit pkgs; }));
 
       # The home-manager module that exposes programs.ccvm.* and installs `ccvm`.
       homeManagerModules.default = import ./modules/home-manager.nix;
