@@ -245,6 +245,19 @@ could not state correctly. When `shareClaudeConfig` brings the host's own `~/.cl
 the guest **appends** rather than overwrites (the combined file copies-up into the overlay's
 tmpfs upper, so the host file is never touched), preserving the user's global memory.
 
+**Persisting sessions + memory (`persistClaudeProjects`).** Making `~/.claude` ephemeral has a
+cost: Claude writes each session's transcript and the project's memory under
+`~/.claude/projects/<cwd-slug>/`, and those writes land in the throwaway overlay upper — so a
+session *started inside ccvm* can't be `claude --resume`d in a later run (the transcript is
+gone; the ID isn't found), and memories don't carry over. (Host-native sessions still resume,
+read-only, from the lower.) The opt-in `persistClaudeProjects` mounts the host's
+`~/.claude/projects` **read-write** over that subpath, so transcripts and memory write straight
+back. The scope is the deliberate part: only `projects/` is writable, never the whole
+`~/.claude` — the OAuth credential sits at the config *root*, not under `projects/`, so the
+"credential never written back to the host" invariant (§3.7) is untouched. It stays **off by
+default** because it is the one place, besides project edits in rw mode, where VM activity
+escapes the ephemeral boundary; turning it on is a conscious "I want my history back" choice.
+
 ### 3.8 The microvm.nix runtime-share trap
 
 It is tempting to declare the workspace 9p mount inside the guest NixOS config (or to use

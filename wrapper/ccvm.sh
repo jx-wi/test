@@ -20,6 +20,7 @@ MEMORY="@MEMORY@"
 CORES="@CORES@"
 APIKEYVAR="@APIKEYVAR@"
 SHARECLAUDE="@SHARECLAUDE@"
+PERSISTPROJECTS="@PERSISTPROJECTS@" # 1 = mount host ~/.claude/projects rw (resume + memory persist); 0 = off
 SHAREGIT="@SHAREGIT@" # 1 = stage a sanitized host git config into the guest; 0 = off
 CLAUDEMD="@CLAUDEMD@" # path to the baked ccvm-context CLAUDE.md (empty = inject nothing)
 MOUNTHOSTSTORE="@MOUNTHOSTSTORE@"
@@ -190,6 +191,14 @@ esac
 case "${CCVM_SHARE_CLAUDE_CONFIG:-}" in
   1 | true | yes) SHARECLAUDE=1 ;;
   0 | false | no) SHARECLAUDE=0 ;;
+esac
+
+# Project-history persistence precedence: CCVM_PERSIST_PROJECTS overrides the baked
+# persistClaudeProjects default for one run (mounts host ~/.claude/projects read-write so
+# session transcripts + memory survive — `claude --resume` across runs, persistent memory).
+case "${CCVM_PERSIST_PROJECTS:-}" in
+  1 | true | yes) PERSISTPROJECTS=1 ;;
+  0 | false | no) PERSISTPROJECTS=0 ;;
 esac
 
 # Git-config sharing precedence: CCVM_SHARE_GIT_CONFIG overrides the baked shareGitConfig
@@ -380,6 +389,23 @@ if [[ $SHARECLAUDE == 1 ]]; then
   [[ -f "$HOME/.claude.json" ]] && cp "$HOME/.claude.json" "$SEED/claude-json"
 fi
 
+# ---- persist ~/.claude/projects (opt-in) -----------------------------------
+# Claude stores per-project SESSION TRANSCRIPTS (read by `claude --resume`) and per-project
+# MEMORY under ~/.claude/projects/<cwd-slug>/. With shareClaudeConfig those live on the
+# read-only overlay lower, so in-VM writes go to the ephemeral tmpfs upper and vanish — a
+# session started in ccvm can't be resumed later, and memories don't survive. When opted in we
+# mount the host's ~/.claude/projects read-WRITE over that subpath so those writes persist back.
+# Scoped to projects/ ONLY: the OAuth credential (~/.claude/.credentials.json, at the ~/.claude
+# ROOT, not under projects/) is never in this share, so it is still never written to the host.
+PROJECTS_ARGS=()
+if [[ $PERSISTPROJECTS == 1 ]]; then
+  PROJDIR="$HOME/.claude/projects"
+  mkdir -p "$PROJDIR" # create on the host so the share exists even on a first-ever run
+  PROJECTS_ARGS+=(-fsdev "local,id=cproj,path=$PROJDIR,security_model=none")
+  PROJECTS_ARGS+=(-device "virtio-9p-$BUS,fsdev=cproj,mount_tag=ccvm-claude-projects")
+  printf '1' >"$SEED/persist-claude-projects"
+fi
+
 # ---- git config passthrough (default on) -----------------------------------
 # Native devex: in-VM `git` should commit as you, with your aliases and global ignores —
 # like native claude. We stage a SANITIZED copy of your GLOBAL git config into the seed (the
@@ -511,6 +537,7 @@ QEMU_ARGS=(
   -fsdev "$WS_FSDEV"
   -device "virtio-9p-$BUS,fsdev=ws,mount_tag=ccvm-workspace"
   "${CONFIG_ARGS[@]}"
+  "${PROJECTS_ARGS[@]}"
   -device "virtio-rng-$BUS"
   -display none
   -monitor none

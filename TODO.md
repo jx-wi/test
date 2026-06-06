@@ -24,36 +24,32 @@ half-remembered context.
 
 ## Current state (keep this updated)
 
-- **Branch `main`:** items #1, #3, #4, #6(partial), and **#2 (egress) all merged.** Tree clean.
-  Merge history: `30ea263` (#3/#4/#6 + CCVM_MEMORY), `b461ca1` (egress merge, reconciling the
-  conflicts from egress having forked before #3/#4/#6).
-- **Merged `main` is VERIFIED GREEN on the host** (2026-06-06): `nix flake check` clean (only
-  the known cosmetic warnings) and `bash tests/boot.sh` **9/9** — all four uid-remap assertions
-  AND both egress assertions pass in one boot, confirming the remap + firewall coexist.
-- **Branch `egress-allowlist`:** merged and **deleted** (2026-06-06, was `1f394b4`). Only
-  `main` remains.
-- **No git remote** is configured: every merge so far is local-only (see #5).
-- **`host.sh` = 31 assertions** (15 base + 2 uid/gid #4 + 1 egress default-open #2 + 8 git
-  passthrough #7 + 5 extraClaudeMd #8); `egress.sh` = 6. Verified host-side via the dry-run
-  recipe (31/31 green here).
-- **`boot.sh` = 17 assertions** (incl. 5 #7 git + 3 #8 CLAUDEMD: present/blurb/mode-rw) —
-  14/14 was verified on the Nix+KVM box pre-#8; the 3 new #8 assertions need a re-run there.
-- **Commit `c0c5e97` (#7 + the shareClaudeConfig rename) is fully done to the definition of
-  done:** `host.sh` 26/26 (host-side dry-run) + `boot.sh` 14/14 (real VM) + `nix flake check`
-  green on the host (only the known cosmetic warnings: missing `meta` per #6, the
-  `homeManagerModules`/`ccvmParts` "unknown flake output" noise).
-- **#5 placeholder half resolved:** `jx-wi` is the user's real GitHub handle (confirmed
-  2026-06-06) — no substitution needed; the repo will live at `github.com/jx-wi/ccvm`. The git
-  REMOTE is still unconfigured (every merge is local). #7's git-config passthrough was done
-  instead of #5's remote wiring (user redirected: native git devex first).
-- **`@SHAREGIT@` is a new baked token** (shareGitConfig); the wrapper now needs `git` in its
-  runtimeInputs (added in `lib/mkccvm.nix` AND `tests/default.nix`).
-- **RENAME (2026-06-06):** `shareHostConfig` → **`shareClaudeConfig`** (option), with the env
-  var `CCVM_SHARE_CONFIG` → **`CCVM_SHARE_CLAUDE_CONFIG`**, baked token `@SHARECONFIG@` →
-  **`@SHARECLAUDE@`**, and seed marker `share-config` → **`share-claude-config`** — so it reads
-  as a clean parallel to `shareGitConfig`/`CCVM_SHARE_GIT_CONFIG`. Breaking, but pre-public so
-  fine. Older sections of this file below were mechanically renamed too; that's why #3 reads as
-  "dead `shareClaudeConfig` guest option" (it was literally named `shareHostConfig` at the time).
+- **Branch `main` only** (no git remote — every commit is local; see #5). Done & committed:
+  **#1, #2, #3, #4, #6(meta), #7, #8, #9, #10.** Recent commits (newest first):
+  - `c833b47` #8 extraClaudeMd (ccvm-context staged as the guest's `~/.claude/CLAUDE.md`)
+  - `9c15793` #9 boot spinner + guest terminfo fix (terminal fidelity under `--shell`)
+  - `db0405f` #10 FDE scratch-disk **design** captured (design.md §3.11; design-only)
+  - `2c5008d` #6 flake `meta`
+  - `c0c5e97` #7 `shareGitConfig` git passthrough + the `shareHostConfig`→`shareClaudeConfig` rename
+  - `b461ca1` #2 egress allowlist merge (branch `egress-allowlist` since deleted)
+- **#12 (persistClaudeProjects) DONE & VERIFIED on the Nix+KVM box** (2026-06-06): a real
+  cross-run `--resume` worked, and the credential check was clean (host `~/.claude/.credentials.json`
+  hash + mtime + size identical before/after a persist run; `find ~/.claude/projects` for any
+  credential → zero hits). Committed alongside this TODO refresh.
+- **`host.sh` = 34 assertions** (15 base + 2 uid/gid #4 + 1 egress-open #2 + 8 git #7 + 5
+  extraClaudeMd #8 + **3 persist #12**); `egress.sh` = 6. **34/34 green here** via the dry-run
+  recipe (the recipe below was updated for the `@CLAUDEMD@`/`@PERSISTPROJECTS@` tokens).
+- **`boot.sh` = 17 assertions** — **17/17 VERIFIED on the Nix+KVM box** (2026-06-06), including
+  the 5 #7 git + 3 #8 CLAUDEMD assertions, with `nix flake check` clean. #12 adds **no** boot
+  assertion yet (needs a persist-enabled `boot.nix` variant + a host-write check — see #12).
+- **Baked `@TOKENS@` now number 19** (added `@CLAUDEMD@` #8, `@PERSISTPROJECTS@` #12). The
+  token list and value list in BOTH `lib/mkccvm.nix` and `tests/default.nix` must stay balanced
+  at 19 — verify with the awk one-liners (a mismatch silently mis-bakes the wrapper).
+- **#5 placeholder half resolved:** `jx-wi` is the user's real GitHub handle — no substitution
+  needed; repo will live at `github.com/jx-wi/ccvm`. The git REMOTE is still unconfigured.
+- **RENAME (done, `c0c5e97`):** `shareHostConfig` → `shareClaudeConfig` everywhere (option, env
+  `CCVM_SHARE_CLAUDE_CONFIG`, token `@SHARECLAUDE@`, seed marker `share-claude-config`). That is
+  why #3 below reads as "dead `shareClaudeConfig` guest option" — it was `shareHostConfig` then.
 
 ## Working on this box without Nix (the key recipe)
 
@@ -69,7 +65,7 @@ CTX=$(mktemp); printf 'CCVM-CONTEXT-MARKER baked blurb body\n' > "$CTX"   # @CLA
   sed -e 's#@KERNEL@#/dev/null#g' -e 's#@INITRD@#/dev/null#g' -e 's#@STOREIMG@#/dev/null#g' \
       -e 's#@APPEND@#console=ttyS0#g' -e 's#@MEMORY@#4096#g' -e 's#@CORES@#4#g' \
       -e 's#@MODE@#rw#g' -e 's#@APIKEYVAR@#ANTHROPIC_API_KEY#g' -e 's#@SHARECLAUDE@#1#g' \
-      -e 's#@SHAREGIT@#1#g' -e "s#@CLAUDEMD@#$CTX#g" \
+      -e 's#@PERSISTPROJECTS@#0#g' -e 's#@SHAREGIT@#1#g' -e "s#@CLAUDEMD@#$CTX#g" \
       -e 's#@MOUNTHOSTSTORE@#0#g' -e 's#@HOSTSTOREPATH@#/nix/store#g' -e 's#@QEMU@#true#g' \
       -e 's#@DEFAULTMACHINE@#microvm#g' -e 's#@MEMLOCK@#0#g' wrapper/ccvm.sh
 } > "$WRAP"; chmod +x "$WRAP"
@@ -218,7 +214,7 @@ so far are local-only.
 
 ---
 
-## 6. 🟡 Smaller polish — LOW (2 of 3 done)
+## 6. 🟡 Smaller polish — LOW (3 of 4 done; only `--ccvm-help`/`--version` + dedup left)
 
 - ⬜ `ccvm --ccvm-help` / `--version`: ccvm's own flags (`--shell`, `--ccvm-debug`,
   `--auto-update-files`, `--no-auto-update-files`) are undiscoverable — `--help` forwards to
@@ -240,12 +236,12 @@ so far are local-only.
   `writeShellApplication`'s `meta` arg) and re-exported as `parts.meta`, which the flake's `apps`
   (`ccvm` + `default`) reuse — silences the two "lacks attribute 'meta'" warnings and fixes
   `nix run`/search metadata. (The `homeManagerModules`/`ccvmParts` "unknown flake output"
-  warnings are separate, pre-existing, and cosmetic per CLAUDE.md.) NEEDS `nix flake check` on
-  the Nix box to confirm the two warnings are gone.
+  warnings are separate, pre-existing, and cosmetic per CLAUDE.md.) **Verified on the Nix box
+  (`2c5008d`): the two `meta` warnings are gone.**
 
 ---
 
-## 7. 🟡 git identity passthrough + the `git push` export story — commit half DONE
+## 7. 🟡 git identity passthrough (DONE, `c0c5e97`) + the `git push` export story (still open)
 
 **Done — `shareGitConfig` (default on):** the wrapper stages a SANITIZED copy of the host's
 GLOBAL git config into the seed (`seed/gitconfig`/`gitignore`); the guest seed service lays it
@@ -258,12 +254,9 @@ content, force `commit.gpgsign`/`tag.gpgsign` off (signing key never carried). R
 Files: `wrapper/ccvm.sh` (staging block), `guest/launcher.nix` (install), `lib/mkccvm.nix` +
 `modules/home-manager.nix` (option/token/default + `git` in wrapper runtimeInputs),
 `tests/{host.sh,boot.sh,stub-claude.sh,default.nix}`, README + design §3.7 + CLAUDE.md.
-**Verified host-side here:** `tests/host.sh` 26/26 (the 8 new §8 git assertions: identity/alias
-carried, `/nix/store` stripped, credential helper stripped, signing forced off, ignore content
-staged, opt-out stages nothing) via the dry-run recipe — and an eyeball dump of the sanitized
-config. **Unverified here** (needs Nix+KVM): `nix flake check` (guest eval + the new token) and
-`bash tests/boot.sh` (the 5 new GUEST-side git assertions — config present, identity, sanitized,
-signing off, ignore present — under a real boot).
+**VERIFIED & COMMITTED (`c0c5e97`):** `tests/host.sh` (the 8 git assertions) green here, and on
+the Nix+KVM box `nix flake check` clean + `bash tests/boot.sh` green (the 5 guest-side git
+assertions: config present, identity, sanitized, signing off, ignore present).
 
 **Still ⬜ — the push/export story:** `~/.ssh` is **deliberately** unshared, so `git push` to an
 SSH remote can't authenticate in the VM; the README now states this honestly (commit works,
@@ -275,7 +268,7 @@ but pushes don't).
 
 ---
 
-## 8. ✅ `extraClaudeMd` / `extraContext` option — DONE (host-verified; needs Nix+KVM boot pass)
+## 8. ✅ `extraClaudeMd` / `extraContext` option — DONE & VERIFIED (`c833b47`)
 
 A `programs.ccvm.extraClaudeMd` (lines) staged as the guest's `~/.claude/CLAUDE.md` so the agent
 knows it's inside ccvm (ephemeral, sandboxed, only the project dir shared) and adapts — more
@@ -304,15 +297,13 @@ home-manager option default → no string duplication / drift); `extraClaudeMd =
   ("Telling the agent it's in ccvm" + option/env rows), design §3.7, CLAUDE.md (deliberate
   default bullet).
 
-**Verified here:** `bash -n` clean (wrapper + all test scripts); `host.sh` **31/31** via the
-dry-run recipe (the 5 new §9 included); eyeballed the staged `seed/claude-md` (mode line prepended,
-then blurb). **Unverified here** (needs Nix+KVM): `nix flake check` (guest eval + the new
-`@CLAUDEMD@` token balance) and `bash tests/boot.sh` (the 3 new guest-side CLAUDEMD assertions
-under a real boot).
+**VERIFIED & COMMITTED (`c833b47`):** `host.sh` 31/31 here; on the Nix+KVM box `nix flake check`
+clean + `bash tests/boot.sh` **17/17** (incl. the 3 guest-side CLAUDEMD assertions: present,
+blurb, mode-rw).
 
 ---
 
-## 9. ✅ Loading & status indicators during boot/wait — DONE (human-verified spinner; +terminfo fix)
+## 9. ✅ Loading & status indicators during boot/wait — DONE & VERIFIED (`9c15793`; +terminfo fix)
 
 The wrapper was silent through `wait_for_boot` (slow under TCG — looked hung). Added a braille
 spinner (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`) + status text.
@@ -390,10 +381,73 @@ crosses 9p, fresh `luksFormat` per boot, the FDE-as-wipe rationale, and the two 
 
 ---
 
+## 11. ✅ Session `--resume` fails across ccvm runs ("ID not found") — ROOT-CAUSED, fixed by #12
+
+**Symptom (user-reported 2026-06-06):** start a Claude session *inside* ccvm, exit, then try to
+resume it in a later run (`ccvm --resume` / `-r <id>` — forwarded verbatim to claude) → "ID not
+found", even though the session was recent/active.
+
+**Root cause:** Claude stores each session's transcript at `~/.claude/projects/<cwd-slug>/<id>.jsonl`
+(`--resume` reads these). With `shareClaudeConfig` (default), `~/.claude` is a **read-only 9p lower
++ tmpfs upper overlay**, so transcripts Claude writes in-VM land in the **ephemeral upper** and are
+gone on exit → the next run can't find the ID. (Sessions started with *native* host `claude` DO
+resume in-VM — they're on the read-only lower.) The cwd-slug matches the host because ccvm mirrors
+the workspace at the identical absolute path, so this is purely a persistence problem, **not** a
+slug mismatch.
+
+**Fix:** #12 (`persistClaudeProjects`) — mount `~/.claude/projects` read-write so transcripts
+persist back to the host; then cross-run `--resume` works. No separate work item; verifying #12's
+boot/resume path closes this too.
+
+---
+
+## 12. ✅ `persistClaudeProjects` — persist session transcripts + memory to the host — DONE & VERIFIED
+
+**Why:** answers #11 (cross-run `--resume`) and the user's ask to **sync in-VM Claude memory back
+to the host**. Both live under `~/.claude/projects/<cwd-slug>/` (transcripts = `*.jsonl`, memory =
+`memory/`), which is ephemeral today (see #11).
+
+**Design (mirrors the share* options):** opt-in `programs.ccvm.persistClaudeProjects` (default
+**false** — keeps the ephemeral stance). When on, the wrapper mounts the host `~/.claude/projects`
+into the VM **read-write** (its own 9p share, `mount_tag=ccvm-claude-projects`), and the guest
+mounts it over `~/.claude/projects` (on top of the config overlay, or plain tmpfs home if
+`shareClaudeConfig` is off) so those writes reach the host. **Scoped to `projects/` ONLY** — the
+OAuth credential is at the `~/.claude` *root*, never under `projects/`, so the "credential never
+written back" invariant holds (now also a security note in CLAUDE.md). Per-run: `CCVM_PERSIST_PROJECTS=0|1`.
+
+**Done (on the working tree, NOT committed):**
+- `lib/mkccvm.nix`: default + new `@PERSISTPROJECTS@` token (lists balanced 19/19).
+- `modules/home-manager.nix`: `persistClaudeProjects` option + inherit.
+- `wrapper/ccvm.sh`: baked `PERSISTPROJECTS`, `CCVM_PERSIST_PROJECTS` override, `PROJECTS_ARGS`
+  writable-share block (`mkdir -p` the host dir, security_model=none, NOT readonly) + `seed/persist-claude-projects` marker; added to the QEMU args array.
+- `guest/launcher.nix`: after the shareClaudeConfig overlay, `mount -t 9p ... ccvm-claude-projects`
+  at `~/.claude/projects` (no `chown -R` — passthrough + uid-remap give correct ownership and a
+  recursive chown over a big history risks an overlay copy-up).
+- `tests/default.nix` `@PERSISTPROJECTS@` token; `host.sh` §10 (default = no marker; opt-in writes
+  the marker AND creates the host `~/.claude/projects`). README (option + env + "Resuming sessions
+  & persisting memory"), design §3.7, CLAUDE.md (2 invariants updated).
+
+**Verified here:** `bash -n` clean; `host.sh` **34/34** via the dry-run recipe (the 3 new §10).
+**Verified on the Nix+KVM box (2026-06-06):**
+1. `nix run` builds + boots (flake evaluates; 19/19 token balance correct).
+2. Real cross-run **resume** worked: `CCVM_PERSIST_PROJECTS=1 ccvm` → printed a resume ID →
+   `CCVM_PERSIST_PROJECTS=1 ccvm --resume` found and resumed it; memory persisted to the host.
+3. **Credential untouched:** host `~/.claude/.credentials.json` sha256 + mtime + size identical
+   before/after a persist run; `find ~/.claude/projects -iname '*credential*'` → zero hits. The
+   share is rooted at `$HOME/.claude/projects` (wrapper L404), so 9p can't reach the credential
+   one level up.
+
+**Follow-ups (optional):** a dedicated persist-enabled `boot.nix` variant + a guest-write boot
+assertion (currently #12 has no boot.sh coverage); consider scoping the share to the current
+project's slug instead of all of `projects/` if exposing all history to in-VM writes is a concern.
+
+---
+
 ### Cross-cutting notes
 
-- **No git remote yet** (#5): every merge is local. The egress feature (#2) sits on an unmerged
-  branch precisely so an unverified Nix-eval typo can't break `main`'s CI.
+- **No git remote yet** (#5): every commit is local-only; `main` is the only branch (the
+  `egress-allowlist` branch was merged and deleted).
+- **#12 is the one uncommitted thing** — verify it on the Nix+KVM box (see #12), then commit.
 - **Commit trailer:** `Co-authored-by: Claude <noreply@anthropic.com>` (exact form; see CLAUDE.md).
 - **Recently done, not a blocker:** `CCVM_MEMORY=<MiB>` per-run guest-RAM override (wrapper + docs
   + `host.sh` tests). The `memory` home-manager option already existed (default 4096); the new bit

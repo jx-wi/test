@@ -297,6 +297,27 @@ SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 CCVM_CLAUDE_MD= run)/seed"
   ok "claude-md: CCVM_CLAUDE_MD= stages no context" ||
   no "claude-md: opt-out still staged a context file"
 
+# ===========================================================================
+# 10. persistClaudeProjects: opt-in writes the enforce marker and ensures the
+#     host ~/.claude/projects dir exists; default (baked off) stages nothing.
+# ===========================================================================
+# Default (baked PERSISTPROJECTS=0): no marker — projects writes stay ephemeral.
+SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 run)/seed"
+[[ ! -e "$SEED/persist-claude-projects" ]] &&
+  ok "persist: default stages no projects-persist marker" ||
+  no "persist: marker present without opt-in"
+
+# Opt in via the env override: marker written AND the host projects dir created for the share.
+PERSIST_HOME="$WORK/persist-home"
+mkdir -p "$PERSIST_HOME"
+SEED="$(HOME="$PERSIST_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 CCVM_PERSIST_PROJECTS=1 run)/seed"
+[[ "$(cat "$SEED/persist-claude-projects" 2>/dev/null)" == 1 ]] &&
+  ok "persist: CCVM_PERSIST_PROJECTS=1 writes the persist marker" ||
+  no "persist: opt-in did not write the marker"
+[[ -d "$PERSIST_HOME/.claude/projects" ]] &&
+  ok "persist: host ~/.claude/projects created for the writable share" ||
+  no "persist: host projects dir not created"
+
 # ---------------------------------------------------------------------------
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

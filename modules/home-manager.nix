@@ -10,8 +10,8 @@ let
   ccvmPkg = (mkCcvm {
     inherit (cfg)
       package autoUpdateFiles memory cores extraPackages mountHostNixStore
-      apiKeyVariable shareClaudeConfig shareGitConfig extraClaudeMd lockGuestMemory
-      egressAllowlist egressPorts extraGuestModules;
+      apiKeyVariable shareClaudeConfig persistClaudeProjects shareGitConfig extraClaudeMd
+      lockGuestMemory egressAllowlist egressPorts extraGuestModules;
   }).wrapper;
 in
 {
@@ -82,6 +82,22 @@ in
         Claude's writes go to an ephemeral overlay and do not persist back to the host; the
         OAuth credential is exposed read-only and never copied to disk. false: share nothing
         from ~/.claude (more isolated). Per-run override: `CCVM_SHARE_CLAUDE_CONFIG=0|1`.
+      '';
+    };
+
+    persistClaudeProjects = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        false (default): Claude's writes to ~/.claude/projects inside the VM — per-project
+        SESSION TRANSCRIPTS and MEMORY — land in the ephemeral config overlay and vanish on
+        exit, so a session started in ccvm cannot be `claude --resume`d in a later run ("ID not
+        found") and memories do not survive. true: mount the host's ~/.claude/projects into the
+        VM read-WRITE so those writes persist back to the host, making cross-run resume and
+        memory work like native `claude`. Deliberately scoped to projects/ ONLY — the OAuth
+        credential (~/.claude/.credentials.json) is not under projects/, so it is still never
+        written back to the host. Requires shareClaudeConfig in spirit (it is the host ~/.claude
+        being shared); works independently too. Per-run override: CCVM_PERSIST_PROJECTS=0|1.
       '';
     };
 

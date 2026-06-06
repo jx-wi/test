@@ -22,6 +22,14 @@ let
     mountHostNixStore = false;
     apiKeyVariable = "ANTHROPIC_API_KEY";
     shareClaudeConfig = true;
+    # Persist the in-VM ~/.claude/projects directory back to the host (opt-in, off by default).
+    # That directory holds Claude's per-project SESSION TRANSCRIPTS (so `claude --resume` works
+    # across runs) and the per-project MEMORY. Without this, those writes land in the ephemeral
+    # ~/.claude overlay upper and vanish on exit — a session started in ccvm can't be resumed
+    # later ("ID not found"), and memories don't survive. Scoped to projects/ ONLY, so the OAuth
+    # credential (~/.claude/.credentials.json, NOT under projects/) is still never written back.
+    # Per-run override: CCVM_PERSIST_PROJECTS=0|1.
+    persistClaudeProjects = false;
     # Reuse the host's git identity/aliases/ignores inside the VM so in-VM `git` behaves like
     # native (commits as you). On by default (native-mirroring spirit). The wrapper stages a
     # SANITIZED copy of the global git config — host-only /nix/store tool paths and credentials
@@ -122,6 +130,7 @@ let
         "@MODE@"
         "@APIKEYVAR@"
         "@SHARECLAUDE@"
+        "@PERSISTPROJECTS@"
         "@SHAREGIT@"
         "@CLAUDEMD@"
         "@MOUNTHOSTSTORE@"
@@ -142,6 +151,7 @@ let
         (if config.autoUpdateFiles then "rw" else "overlay")
         config.apiKeyVariable
         (if config.shareClaudeConfig then "1" else "0")
+        (if config.persistClaudeProjects then "1" else "0")
         (if config.shareGitConfig then "1" else "0")
         claudeMdFile
         (if config.mountHostNixStore then "1" else "0")

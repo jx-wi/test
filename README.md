@@ -113,6 +113,7 @@ Those `ccvm` flags are intercepted by the wrapper and are **not** forwarded to c
 | `mountHostNixStore` | `false` | Share host `/nix/store` (ro) instead of a self-contained image — smaller/faster, less isolated. |
 | `apiKeyVariable` | `"ANTHROPIC_API_KEY"` | Host env var carrying the key; passed only via SSH `SendEnv`. |
 | `shareClaudeConfig` | `true` | Mount the host `~/.claude` (ro) so the VM reuses your login, settings, commands and memory (home-manager symlinks are dereferenced); writes stay ephemeral. Per-run: `CCVM_SHARE_CLAUDE_CONFIG=0\|1`. |
+| `persistClaudeProjects` | `false` | **Opt-in.** Mount the host `~/.claude/projects` into the VM **read-write** so Claude's session transcripts and per-project memory persist back to the host — `claude --resume` then works across runs and memory survives. Off by default (those writes are otherwise ephemeral, like the rest of `~/.claude`). Scoped to `projects/` only, so the OAuth credential is still never written back. See [Resuming sessions & persisting memory](#resuming-sessions--persisting-memory). Per-run: `CCVM_PERSIST_PROJECTS=0\|1`. |
 | `shareGitConfig` | `true` | Stage a **sanitized** copy of your global git config into the VM (`~/.config/git/config`) so in-VM `git` commits as you, with your aliases and global ignores. Host-only `/nix/store` tool paths (editor/pager/delta/gh helper), all `credential.*`, and commit signing are stripped — nothing secret crosses, nothing dangles. See [Git config in the VM](#git-config-in-the-vm). Per-run: `CCVM_SHARE_GIT_CONFIG=0\|1`. |
 | `extraClaudeMd` | *(built-in blurb)* | Markdown staged as the guest's `~/.claude/CLAUDE.md` so the agent knows it's inside ccvm (ephemeral, sandboxed, only the project dir shared) and adapts. Appended to any host-shared `CLAUDE.md`; the wrapper prepends a runtime note about the file-sharing mode. Set `""` to disable, or replace with your own. See [Telling the agent it's in ccvm](#telling-the-agent-its-in-ccvm). Per-run: `CCVM_CLAUDE_MD=<file>`. |
 | `lockGuestMemory` | `false` | mlock the guest RAM (QEMU `mem-lock=on`) so it can't be paged to the host's (possibly unencrypted) swap — keeps in-VM secrets off persistent storage. Needs sufficient `RLIMIT_MEMLOCK`. Per-run: `CCVM_MLOCK=0\|1`. |
@@ -127,6 +128,7 @@ Those `ccvm` flags are intercepted by the wrapper and are **not** forwarded to c
 | `ccvm --auto-update-files` / `--no-auto-update-files` | Force file-sharing mode for one run (wins over `CCVM_AUTOUPDATE`); intercepted, not forwarded to claude. |
 | `CCVM_AUTOUPDATE=1\|0` | Override the file-sharing mode for one run. |
 | `CCVM_SHARE_CLAUDE_CONFIG=1\|0` | Override host `~/.claude` sharing for one run (wins over the baked `shareClaudeConfig`). |
+| `CCVM_PERSIST_PROJECTS=1\|0` | Persist (or don't) `~/.claude/projects` back to the host for one run — enables cross-run `--resume` and memory (overrides the baked `persistClaudeProjects`). |
 | `CCVM_SHARE_GIT_CONFIG=1\|0` | Override git-config staging for one run (wins over the baked `shareGitConfig`). |
 | `CCVM_CLAUDE_MD=<file>` | Use an alternate ccvm-context file for one run (wins over the baked `extraClaudeMd`); set it **empty** to inject nothing. |
 | `CCVM_MLOCK=1\|0` | Lock (or unlock) the guest RAM for one run (overrides the baked `lockGuestMemory`). |
@@ -203,6 +205,24 @@ flag, so ccvm's transparent passthrough is untouched. When `shareClaudeConfig` b
 `~/.claude/CLAUDE.md`, the ccvm blurb is **appended** to it (your global memory is preserved;
 the host file is never modified). Replace it with your own text via `extraClaudeMd = "…"`, or
 turn it off entirely with `extraClaudeMd = ""` (or `CCVM_CLAUDE_MD=` for one run).
+
+### Resuming sessions & persisting memory (`persistClaudeProjects` / `CCVM_PERSIST_PROJECTS`)
+
+By default everything Claude writes under `~/.claude` inside the VM is **ephemeral** — it rides a
+read-only mount of your host config with a throwaway overlay on top, so writes vanish on exit.
+That includes `~/.claude/projects/<project>/`, where Claude keeps each session's **transcript**
+(what `claude --resume` reads) and the project's **memory**. The consequence: a session you
+*start inside ccvm* can't be resumed in a later run — `claude --resume` reports the session ID is
+not found — and memories don't carry over. (Sessions you started with native `claude` on the host
+still show up, read-only, because the host history is mounted in.)
+
+Turn on `persistClaudeProjects` (or `CCVM_PERSIST_PROJECTS=1` for one run) to mount the host's
+`~/.claude/projects` **read-write**, so those transcripts and memories are written straight back
+to the host. Then `--resume` works across ccvm runs and memory persists, just like native. It's
+**off by default** because it relaxes the "nothing from the VM touches the host except your
+project edits" stance. The relaxation is deliberately narrow: only `~/.claude/projects/` is made
+writable — your OAuth credential lives at `~/.claude/.credentials.json` (the config root, *not*
+under `projects/`), so it is never in this share and never written back.
 
 ---
 

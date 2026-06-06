@@ -28,6 +28,7 @@ let
           "@MODE@"
           "@APIKEYVAR@"
           "@SHARECLAUDE@"
+          "@PERSISTPROJECTS@"
           "@SHAREGIT@"
           "@CLAUDEMD@"
           "@MOUNTHOSTSTORE@"
@@ -47,8 +48,9 @@ let
           "4" # CORES
           "rw" # MODE          (production default: autoUpdateFiles=true)
           "ANTHROPIC_API_KEY" # APIKEYVAR
-          "1" # SHARECLAUDE    (production default: shareClaudeConfig=true)
-          "1" # SHAREGIT       (production default: shareGitConfig=true)
+          "1" # SHARECLAUDE      (production default: shareClaudeConfig=true)
+          "0" # PERSISTPROJECTS  (production default: persistClaudeProjects=false)
+          "1" # SHAREGIT         (production default: shareGitConfig=true)
           # CLAUDEMD: a fixture context file so the staging block has something to read; host.sh
           # asserts its marker + the runtime mode line reach seed/claude-md (production bakes the
           # real lib/ccvm-context.md).

@@ -33,7 +33,9 @@ These are the whole point of the project. Treat any change that weakens one as a
   the non-secret `~/.claude.json` is staged through the seed. The config-deref staging loop
   selects `find -type l` and skips `.credentials.json` by name; keep both guards. Verify by
   running the staging loop standalone and grepping the seed dir for the credential — expect
-  zero hits.
+  zero hits. **`persistClaudeProjects` (opt-in) does not change this:** it mounts only
+  `~/.claude/projects` read-write; the credential lives at the `~/.claude` *root*, not under
+  `projects/`, so it is never in that share. Never widen the writable mount to all of `~/.claude`.
 - **`shareGitConfig` stages only sanitized, non-secret git config.** The wrapper resolves the
   **global** git config host-side and writes `seed/gitconfig` only after dropping every value
   containing `/nix/store/` (host-only tool paths that would dangle) and **all `credential.*`
@@ -41,7 +43,9 @@ These are the whole point of the project. Treat any change that weakens one as a
   tag signing, and staging `core.excludesfile` by *content*. Keep all four guards. Verify by
   grepping the seed for any `/nix/store` path or `credential` key — expect zero hits.
 - **No persistent disk.** Root is tmpfs; the store is a read-only image. Nothing the agent
-  does survives exit except host-project edits while `autoUpdateFiles=true`.
+  does survives exit except host-project edits while `autoUpdateFiles=true` — and, when the
+  opt-in `persistClaudeProjects` is on, writes under `~/.claude/projects` (session transcripts
+  + memory). Both are deliberate, narrowly-scoped write-throughs, not a general persistent disk.
 - **`autoUpdateFiles=false` means genuinely read-only.** The host tree is the 9p **lower**;
   edits land in a tmpfs **upper** and must not reach the host.
 - **Only the CWD is shared.** No `~/.ssh`, `~/.aws`, or home dir crosses the boundary.

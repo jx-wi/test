@@ -151,6 +151,20 @@ let
           fi
         fi
       fi
+
+      # Opt-in: persist ~/.claude/projects back to the host (session transcripts + memory).
+      # Mounted read-WRITE over the (read-only) config overlay's projects/ subpath, so Claude's
+      # writes there reach the host — `claude --resume` works across runs and memory survives.
+      # Must run AFTER the shareClaudeConfig overlay mount above so it layers over it; if
+      # shareClaudeConfig is off, /home/ccvm/.claude is plain tmpfs and we mount onto it just the
+      # same. No chown -R (passthrough + the uid remap already give correct host-side ownership;
+      # a recursive chown over a large history would also risk an overlay copy-up). Best-effort.
+      if [ -f "$seed/persist-claude-projects" ]; then
+        install -d -m 700 -o ccvm -g users /home/ccvm/.claude
+        mkdir -p /home/ccvm/.claude/projects
+        mount -t 9p -o ${p9} ccvm-claude-projects /home/ccvm/.claude/projects || true
+      fi
+
       # Opt-in egress allowlist. The host (which has working DNS) resolved the configured
       # FQDNs into IPs and wrote them to seed/egress-allow; seed/egress-enforce is the
       # "lock down" marker. An ABSENT marker means open egress — the native default — and we
