@@ -24,21 +24,17 @@ half-remembered context.
 
 ## Current state (keep this updated)
 
-- **Branch `main`:** item #1 merged. **Working tree is intentionally dirty** — uncommitted:
-  the `CCVM_MEMORY` per-run override (`wrapper/ccvm.sh`, `modules/home-manager.nix`,
-  `README.md`, `tests/host.sh`), item #3's dead-option removal (`guest/default.nix`,
-  `lib/mkccvm.nix`), item #4's uid auto-remap (`wrapper/ccvm.sh`, `guest/launcher.nix`,
-  `guest/default.nix`, `docs/design.md`, `tests/host.sh`, `tests/boot.sh`,
-  `tests/stub-claude.sh`), item #6's TCG `wait_for_boot` timeout + boot-test hardening
-  (`wrapper/ccvm.sh` `wait_for_boot`, `tests/boot.sh` `run_capture`, `tests/stub-claude.sh`
-  `exit 0`), **and this `TODO.md`**. Not a mistake; not yet committed because the user hadn't
-  asked. Commit on `main` or a small branch when directed.
-- **Branch `egress-allowlist`:** item #2 (the egress allowlist), committed there, **not merged**
-  — it diverges from `main` and is blocked on Nix+KVM verification (see #2).
+- **Branch `main`:** items #1, #3, #4, #6(partial), and **#2 (egress) all merged.** Tree clean.
+  Merge history: `30ea263` (#3/#4/#6 + CCVM_MEMORY), `b461ca1` (egress merge, reconciling the
+  conflicts from egress having forked before #3/#4/#6).
+- **`nix flake check` + `bash tests/boot.sh` were GREEN on the host** for the egress branch
+  pre-merge (boot.sh 7/7). **Re-verify both against merged `main`** — the guest now runs the
+  uid remap AND the egress firewall in one boot, a combination not yet booted together.
+- **Branch `egress-allowlist`:** fully merged into `main`; safe to delete
+  (`git branch -d egress-allowlist`) once the merged-main re-verification is green.
 - **No git remote** is configured: every merge so far is local-only (see #5).
-- **`host.sh` assertion counts differ by branch** (the file diverged): committed `main` = 13;
-  `main` working tree (with `CCVM_MEMORY` + #4 uid/gid) = **17**; `egress-allowlist` = **14**
-  (adds the default-open assertion); they reconcile to 18 once #2 merges.
+- **`host.sh` on merged `main` = 18 assertions** (15 base + 2 uid/gid #4 + 1 egress
+  default-open #2); `egress.sh` = 6. Both verified host-side via the dry-run recipe.
 - **Next item: #5** (replace `jx-wi` placeholders + add a git remote) — fully doable on this
   box, but needs the user to confirm the real GitHub org/identity first.
 
@@ -96,7 +92,7 @@ Merged to `main` (local; no git remote configured yet — see #5).
 
 ---
 
-## 2. 🟡 Default-mode credential-exfil tradeoff + egress allowlist — IMPLEMENTED, on branch `egress-allowlist`, NOT merged
+## 2. ✅ Default-mode credential-exfil tradeoff + egress allowlist — DONE, MERGED to `main` (`b461ca1`)
 
 **Problem (the block):** in the default posture (`shareHostConfig=true` + `autoUpdateFiles=true`
 + open egress, all defaults), the host OAuth credential is readable by the agent inside the VM
@@ -115,17 +111,28 @@ default-open** egress allowlist (design §3.10 MVP) + honest documentation of th
   to the seed.
 - Guest `ccvm-seed.service` applies a **default-deny** nftables OUTPUT chain (allowlist + loopback
   + conntrack replies so inbound ssh survives + DNS + DHCP renewal). `nft -f` is atomic, so on
-  failure it **fails closed** (bare deny-all) rather than leave egress open. `modprobe
-  nf_tables nf_conntrack` first.
+  failure it **fails closed** rather than leave egress open. `modprobe nf_tables nf_conntrack` first.
 - Tests: `tests/egress.sh` (host-side staging — verbatim IP/CIDR, FQDN resolution, ports) in
   `nix flake check`; `host.sh` asserts default = open; `boot.sh` + stub probe real enforcement.
-- Docs: README "Threat model & network egress" section (default tradeoff + mitigations: API-key
-  auth, `egressAllowlist`, `autoUpdateFiles=false`); design §3.10 rewritten "planned → implemented
-  (opt-in MVP)"; SNI-proxy noted as the stronger future layer.
+- Docs: README "Threat model & network egress" section; design §3.10 rewritten "planned →
+  implemented (opt-in MVP)"; SNI-proxy noted as the stronger future layer.
 
-**Blocked on:** `nix flake check` (eval — `pkgs.getent` etc.) and `tests/boot.sh` (real
-packet-drop) on a Nix+KVM box. Host-side staging tests pass locally. **Do not merge until both
-are green.** To land: `git checkout egress-allowlist && nix flake check && bash tests/boot.sh`.
+**Hardening review applied (`1f394b4`) — most-secure-without-UX-cost on six findings:**
+- **A** SC2086 build-breaker fixed (`read -ra`, was unquoted `for entry in $EGRESSALLOW`).
+- **B** DNS restricted to the slirp stub resolver (10.0.2.3/fec0::3) — blocks direct
+  DNS-to-anywhere; recursive-resolver tunneling documented as residual. Docs softened from
+  "closes the exfiltration channel" → "closes the *direct* channel".
+- **C** fail-OPEN hole closed: wrapper writes an `egress-enforce` marker (guest enforces on
+  THAT, so empty set → deny-all), and the wrapper `die`s if opted-in-but-nothing-resolved.
+- **D** fail-closed fallback keeps lo+conntrack+DNS+NDP so the ssh session survives (old bare
+  deny-all hung the boot).
+- **E** docs: api.anthropic.com CDN IP-pinning can break auth mid-session; dropped "never breaks".
+- **F** IPv6 NDP allowed (no v6 black-hole); TCP-only / QUIC-falls-back documented.
+
+**Verified GREEN on the host (pre-merge):** `nix flake check` and `bash tests/boot.sh` 7/7
+(allowlisted reachable + non-allowlisted blocked). Merged to `main` via `b461ca1`, conflicts
+reconciled (egress forked before #3/#4/#6). **TODO: re-run `nix flake check` + `bash tests/boot.sh`
+on merged `main`** — the guest now runs the uid remap and the egress firewall in one boot.
 
 ---
 
