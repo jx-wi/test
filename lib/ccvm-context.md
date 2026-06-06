@@ -17,3 +17,9 @@ user's host machine directly. A few things follow from that:
   user, or use an HTTPS remote with a token they provide.
 - **Network access may be restricted.** Egress can be limited to an allowlist; if a network
   request fails unexpectedly, the destination may simply not be permitted from inside the VM.
+- **Prefer the codebase over agent memory for anything durable.** Write lasting knowledge into
+  the project's own files — `CLAUDE.md`, `README.md`, `docs/`, code comments — and commit it,
+  rather than relying on saved memory. Memory is brittle for developer workflows, and in ccvm it
+  is **ephemeral by default**: it lives in this throwaway VM and is discarded on exit. Only when
+  `CCVM_PERSIST_PROJECTS=1` does it survive across runs — see the session note above for whether
+  it persists right now.

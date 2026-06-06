@@ -200,6 +200,11 @@ wrapper also **prepends a line that reflects the current file-sharing mode** —
 says edits are live on the host; in overlay mode it warns edits are discarded on exit — which
 the build-time blurb can't know on its own.
 
+The default blurb also tells the agent to **prefer writing durable information into the codebase**
+(`CLAUDE.md`, `README`, `docs/`, code) and committing it, rather than relying on memory — memory
+is brittle for devex and, unless `CCVM_PERSIST_PROJECTS=1`, ephemeral in the VM. The runtime note
+states this session's actual persistence status, so the agent's guidance matches reality.
+
 It rides the **read-only seed** and is laid over the config overlay, never passed as a `claude`
 flag, so ccvm's transparent passthrough is untouched. When `shareClaudeConfig` brings your host
 `~/.claude/CLAUDE.md`, the ccvm blurb is **appended** to it (your global memory is preserved;

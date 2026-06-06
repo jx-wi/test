@@ -472,6 +472,11 @@ if [[ -n $CLAUDEMD && -r $CLAUDEMD ]]; then
     else
       printf 'File edits are kept in an ephemeral overlay and are DISCARDED when the VM exits — they do NOT reach the host (autoUpdateFiles=false). Anything worth keeping must be exported before exit (e.g. committed and pushed, or copied out by the user).\n\n'
     fi
+    if [[ $PERSISTPROJECTS == 1 ]]; then
+      printf 'Your session history and memory PERSIST to the host this run (CCVM_PERSIST_PROJECTS is on), so saved memory survives and sessions can be resumed later.\n\n'
+    else
+      printf 'Your session history and memory do NOT persist across runs — they live only in this throwaway VM and are discarded on exit. So strongly PREFER writing durable information into the codebase (CLAUDE.md, README, docs/, code) and committing it, over saving it to memory. (Set CCVM_PERSIST_PROJECTS=1 to persist memory + resumable sessions.)\n\n'
+    fi
     cat "$CLAUDEMD"
   } >"$SEED/claude-md"
 fi

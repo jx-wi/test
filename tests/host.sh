@@ -281,6 +281,11 @@ grep -q 'CCVM-CONTEXT-MARKER' "$CM" 2>/dev/null &&
 grep -q 'LIVE to the host' "$CM" 2>/dev/null &&
   ok "claude-md: rw mode prepends the LIVE-edits note" ||
   no "claude-md: rw mode line missing"
+# persist off (baked default): the agent is told memory is ephemeral and to prefer the codebase.
+grep -q 'do NOT persist across runs' "$CM" 2>/dev/null &&
+  grep -q 'PREFER writing durable information into the codebase' "$CM" 2>/dev/null &&
+  ok "claude-md: persist-off run warns memory is ephemeral, prefer the codebase" ||
+  no "claude-md: missing the ephemeral-memory / prefer-codebase guidance"
 
 # Overlay run: the mode line must flip to the DISCARDED warning (and not claim LIVE).
 SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 run --no-auto-update-files)/seed"
@@ -317,6 +322,10 @@ SEED="$(HOME="$PERSIST_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 CCVM_PERSIST_PROJECTS=1 
 [[ -d "$PERSIST_HOME/.claude/projects" ]] &&
   ok "persist: host ~/.claude/projects created for the writable share" ||
   no "persist: host projects dir not created"
+# With persist on, the ccvm-context memory note flips to "memory survives".
+grep -q 'PERSIST to the host this run' "$SEED/claude-md" 2>/dev/null &&
+  ok "persist: claude-md tells the agent memory survives when persist is on" ||
+  no "persist: claude-md memory note did not flip for the persist-on run"
 
 # ---------------------------------------------------------------------------
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
