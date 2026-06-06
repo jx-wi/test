@@ -35,9 +35,50 @@ die() {
   exit 1
 }
 
+# Animated boot progress on stderr. The wrapper is otherwise silent through wait_for_boot,
+# which is slow under TCG and looks hung. PROGRESS is enabled only when stderr is a real
+# terminal AND we're not in debug mode (which already streams the guest console to stderr) —
+# so redirected stderr / pipelines / the dry-run + test captures see nothing ([[ -t 2 ]] is
+# false there), keeping those outputs byte-for-byte clean. Set just before the boot section.
+PROGRESS=0
+SPINNER_PID=""
+# Braille spinner as an ARRAY (not a string sliced with ${s:i:1}: each frame is 3 UTF-8 bytes,
+# and bash substring extraction is byte-based in a non-multibyte locale, which would emit a
+# partial byte). Array indexing sidesteps the locale dependency entirely.
+SPIN=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+# Spin in the BACKGROUND so the animation stays smooth no matter how long a boot probe blocks:
+# QEMU's slirp accepts the forwarded port immediately, so wait_for_boot's banner read can sit
+# for up to its timeout — driving frames from that loop made the spinner freeze for seconds at a
+# time. A detached subshell renders ~30 fps independent of the probe cadence. No-op unless
+# PROGRESS=1, so tests/pipelines/dry-run (stderr not a TTY) never spawn it.
+spinner_start() { # $1 = status text
+  [[ $PROGRESS == 1 ]] || return 0
+  local msg="$1"
+  (
+    i=0
+    while :; do
+      printf '\r\033[K%s %s' "${SPIN[i]}" "$msg" >&2
+      i=$(((i + 1) % ${#SPIN[@]}))
+      sleep 0.03
+    done
+  ) &
+  SPINNER_PID=$!
+}
+# Stop the spinner and clear its line so it never bleeds into the TUI or a following message.
+# `wait` reaps the subshell so no stray frame can land after we clear (same discipline as the
+# debug-tail kill before handing the terminal to ssh -tt). Safe to call when not running.
+spinner_stop() {
+  [[ -n ${SPINNER_PID:-} ]] || return 0
+  kill "$SPINNER_PID" 2>/dev/null || true
+  wait "$SPINNER_PID" 2>/dev/null || true
+  SPINNER_PID=""
+  if [[ $PROGRESS == 1 ]]; then printf '\r\033[K' >&2; fi
+}
+
 # shellcheck disable=SC2329  # invoked indirectly via `trap` below, not by name.
 cleanup() {
-  # Stop the optional debug log tail first so it does not outlive us.
+  # Stop the boot spinner / debug log tail first so neither outlives us (e.g. Ctrl-C mid-boot).
+  if [[ -n ${SPINNER_PID:-} ]]; then kill "$SPINNER_PID" 2>/dev/null || true; fi
   if [[ -n ${TAILPID:-} ]]; then kill "$TAILPID" 2>/dev/null || true; fi
   # Tear down the VM: ask politely, then insist. Freeing qemu discards all guest RAM,
   # which is the entire ephemeral story — there is no disk state to clean up.
@@ -88,6 +129,8 @@ wait_for_boot() {
   # a ~36s cap (120 × 0.3s) produces spurious "boot failed" under tcg (the box may still be
   # booting). Give TCG a much longer budget; KVM keeps the snappy cap. CCVM_BOOT_TRIES
   # overrides for pathological cases. Each try is ~0.3s sleep + connect/read overhead.
+  # The spinner (if any) animates in the background — see spinner_start — so this loop just
+  # probes and sleeps; it never touches the terminal itself.
   local _ banner tries="${CCVM_BOOT_TRIES:-120}"
   [[ -z ${CCVM_BOOT_TRIES:-} && ${ACCEL:-} == tcg ]] && tries=600
   for _ in $(seq 1 "$tries"); do
@@ -472,6 +515,12 @@ if [[ $DRYRUN == 1 ]]; then
 fi
 
 # ---- boot ------------------------------------------------------------------
+# Enable the boot spinner now (past the dry-run early-exit, so it never runs under a test).
+# Only when stderr is a TTY and not in debug mode (whose console tail owns stderr already).
+[[ -t 2 && $DEBUG != 1 ]] && PROGRESS=1
+boot_msg="booting microVM, waiting for guest sshd…"
+[[ $ACCEL == tcg ]] && boot_msg="booting microVM (software emulation — slow), waiting for guest sshd…"
+
 # qemu runs headless in the background with stdio detached from the terminal so it never
 # touches the TTY the user's claude session will own.
 @QEMU@ "${QEMU_ARGS[@]}" </dev/null >"$TMP/qemu.log" 2>&1 &
@@ -484,12 +533,16 @@ if [[ $DEBUG == 1 ]]; then
   TAILPID=$!
 fi
 
+# Spin while we wait (background; no-op unless PROGRESS=1). Stopped on both paths below.
+spinner_start "$boot_msg"
 if ! wait_for_boot; then
+  spinner_stop # clear the spinner line so the failure dump starts clean
   warn "guest did not come up within timeout. Last console output:"
   tail -n 40 "$TMP/console.log" 2>/dev/null >&2 || true
   tail -n 20 "$TMP/qemu.log" 2>/dev/null >&2 || true
   die "boot failed"
 fi
+spinner_stop # boot succeeded — clear the line before handing the terminal to ssh -tt
 
 # Stop the debug tail before handing the terminal to the interactive session.
 if [[ -n ${TAILPID:-} ]]; then

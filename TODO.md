@@ -296,15 +296,44 @@ programs.ccvm.extraClaudeMd = ''
 
 ---
 
-## 9. ⬜ Loading & status indicators during boot/wait — NEW
+## 9. ✅ Loading & status indicators during boot/wait — DONE (human-verified spinner; +terminfo fix)
 
-The wrapper is silent through `wait_for_boot` (slow under TCG — looks hung). Add a spinner
-(ASCII `\ | / -` or braille `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`) plus status text ("booting microVM…", "waiting for
-guest sshd…", "connecting…").
+The wrapper was silent through `wait_for_boot` (slow under TCG — looked hung). Added a braille
+spinner (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`) + status text.
 
-**Constraints:** only animate when **stderr is a TTY**; clear the line before handing the terminal
-to `ssh -tt`/the TUI (same discipline as the existing debug-tail kill); must **not** fire under
-`CCVM_DRYRUN`, in tests, or when output is redirected (it would corrupt the dry-run/test captures).
+**First attempt (reverted): probe-coupled animation.** A `spin_wait` helper animated frames during
+the loop's inter-probe `sleep`. It **froze for seconds at a time** in practice: QEMU's slirp
+accepts the forwarded port immediately, so each probe's banner `read -r -t 2` can block up to 2s,
+and the frames were tied to that loop. User-reported.
+
+**Final: background spinner (`wrapper/ccvm.sh`).**
+- `spinner_start`/`spinner_stop`: a detached subshell renders ~30 fps (`sleep 0.03`/frame),
+  **independent of the probe cadence**, so the boot-timeout budget is untouched and the animation
+  stays smooth no matter how long a probe blocks. `wait_for_boot` is back to a plain `sleep 0.3`.
+- `spinner_stop` `kill`s **and `wait`s** the subshell (so no stray frame lands after the clear),
+  then clears the line. Called on **both** boot-success (before `ssh -tt`) and failure (before the
+  console dump); `cleanup` also kills `SPINNER_PID` for Ctrl-C mid-boot. Same discipline as the
+  debug-tail kill.
+- Frames are an **array** (not a sliced string — each braille frame is 3 UTF-8 bytes and bash
+  substring extraction is byte-based in a non-multibyte locale, which would emit a partial byte).
+- `PROGRESS=1` only when **`[[ -t 2 ]]` (stderr is a TTY) AND not `--ccvm-debug`** (debug already
+  streams the guest console to stderr), set **past the dry-run early-exit** — so redirected stderr
+  / pipelines / dry-run + `host.sh`/`boot.sh` captures never spawn the subshell ⇒ output stays
+  byte-clean.
+
+**Also fixed here — terminal fidelity bug (zsh ZLE under `--shell`).** Backspace/quotes corrupted
+in the guest shell: the host forwards `$TERM=xterm-ghostty`/`xterm-kitty`, which the guest's
+ncurses terminfo DB doesn't know, so ZLE couldn't drive the terminal (visible line desynced from
+the edit buffer). Fix: ship the common emulators' own terminfo in `guest/default.nix`
+(`alacritty.terminfo foot.terminfo ghostty.terminfo kitty.terminfo wezterm.terminfo` in
+`environment.systemPackages`). NB: `environment.enableAllTerminfo` (the obvious knob) **broke in
+recent nixpkgs**, hence the explicit list. terminfo outputs are tiny — negligible closure/boot cost.
+
+**Verified here:** `bash -n` clean; `host.sh` **26/26** (the `-t 2` gate keeps it silent under
+capture); the background spinner exercised standalone (smooth ~30 fps, stops with no leftover job,
+clears the line). **Verified by the user on the Nix+KVM box** (2026-06-06): under
+`CCVM_ACCEL=tcg ccvm --shell` the spinner spins smoothly with no multi-second stalls, and the
+guest shell line-editing (backspace, etc.) works correctly with the terminfo fix.
 
 ---
 

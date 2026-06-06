@@ -172,6 +172,19 @@ in
     ##########################################################################
     environment.systemPackages =
       (with pkgs; [
+        # Terminal fidelity: ssh forwards the client's $TERM (e.g. xterm-kitty, xterm-ghostty,
+        # foot, wezterm), but the guest only ships ncurses' built-in terminfo (xterm-256color,
+        # screen, tmux, linux, …). A forwarded TERM the guest can't resolve leaves zsh's ZLE
+        # unable to drive the terminal — the visible line desyncs from the edit buffer (backspace
+        # corrupts, cursor jumps). Ship the common emulators' own terminfo so the forwarded $TERM
+        # resolves. (Replaces `environment.enableAllTerminfo`, which broke in recent nixpkgs.)
+        # terminfo outputs are tiny — negligible closure/boot cost.
+        alacritty.terminfo
+        foot.terminfo
+        ghostty.terminfo
+        kitty.terminfo
+        wezterm.terminfo
+
         git
         openssh
         ripgrep
