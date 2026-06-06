@@ -76,7 +76,11 @@ in
     # Direct kernel boot has no bootloader to supply a cmdline, so the wrapper passes
     # these (plus init=<toplevel>/init) via QEMU -append. Serial console = ttyS0, which
     # QEMU's microvm machine exposes via isa-serial and q35 via the 16550 UART.
-    boot.kernelParams = [ "console=ttyS0" ];
+    boot.kernelParams = [
+      # Serial console differs by arch: 16550/isa-serial (ttyS0) on x86, PL011 (ttyAMA0)
+      # on the aarch64 `virt` machine. A wrong value only loses the debug log, not boot.
+      (if pkgs.stdenv.hostPlatform.isAarch64 then "console=ttyAMA0" else "console=ttyS0")
+    ];
 
     # Root in RAM; discarded on power-off. No size cap => defaults to 50% of VM RAM.
     fileSystems."/" = {

@@ -30,6 +30,13 @@ let
   config = defaults // userConfig;
   system = pkgs.stdenv.hostPlatform.system;
 
+  # The wrapper is arch-specific: pick the matching qemu-system binary and a default
+  # machine type the arch actually supports. `microvm` is x86-only; aarch64 uses `virt`.
+  # On x86_64 these resolve to exactly the previous hardcoded values (qemu-system-x86_64,
+  # microvm), so that path is unchanged.
+  qemuBin = "qemu-system-${pkgs.stdenv.hostPlatform.qemuArch}";
+  defaultMachine = if pkgs.stdenv.hostPlatform.isAarch64 then "virt" else "microvm";
+
   guestSystem = import "${pkgs.path}/nixos/lib/eval-config.nix" {
     inherit system;
     modules = [
@@ -65,7 +72,7 @@ let
 
   wrapper = pkgs.writeShellApplication {
     name = "ccvm";
-    runtimeInputs = with pkgs; [ qemu coreutils openssh gawk gnugrep ];
+    runtimeInputs = with pkgs; [ qemu coreutils openssh findutils ];
     text = builtins.replaceStrings
       [
         "@KERNEL@"
@@ -79,6 +86,8 @@ let
         "@SHARECONFIG@"
         "@MOUNTHOSTSTORE@"
         "@HOSTSTOREPATH@"
+        "@QEMU@"
+        "@DEFAULTMACHINE@"
       ]
       [
         kernel
@@ -92,6 +101,8 @@ let
         (if config.shareHostConfig then "1" else "0")
         (if config.mountHostNixStore then "1" else "0")
         (builtins.storeDir)
+        qemuBin
+        defaultMachine
       ]
       (builtins.readFile ../wrapper/ccvm.sh);
   };

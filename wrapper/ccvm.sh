@@ -61,7 +61,11 @@ pick_port() {
   local p _
   for _ in $(seq 1 50); do
     p=$(((RANDOM % 20000) + 20000))
-    if exec 3<>"/dev/tcp/127.0.0.1/$p" 2>/dev/null; then
+    # The 2>/dev/null must wrap the whole group: redirections apply left-to-right, so on a
+    # bare `exec 3<>… 2>/dev/null` the failing /dev/tcp connect prints "Connection refused"
+    # to the still-current stderr *before* 2>/dev/null takes effect. The brace group routes
+    # that message to /dev/null while leaving fd 3 open in this shell on success.
+    if { exec 3<>"/dev/tcp/127.0.0.1/$p"; } 2>/dev/null; then
       exec 3<&- 3>&- # in use; try another
     else
       printf '%s' "$p"
@@ -77,7 +81,10 @@ wait_for_boot() {
   local _ banner
   for _ in $(seq 1 120); do
     kill -0 "$QEMU_PID" 2>/dev/null || return 1
-    if exec 3<>"/dev/tcp/127.0.0.1/$PORT" 2>/dev/null; then
+    # Brace group, not a bare `exec … 2>/dev/null`: the connect is attempted before a
+    # trailing redirect applies, leaking "Connection refused" to the terminal on every
+    # pre-boot probe. See pick_port for the full explanation.
+    if { exec 3<>"/dev/tcp/127.0.0.1/$PORT"; } 2>/dev/null; then
       if IFS= read -r -t 2 banner <&3; then
         exec 3<&- 3>&-
         case "$banner" in SSH-*) return 0 ;; esac
@@ -189,7 +196,7 @@ fi
 # NOTE: the API key is deliberately absent from the seed.
 
 # ---- assemble QEMU device args --------------------------------------------
-MACHINE="${CCVM_MACHINE:-microvm}"
+MACHINE="${CCVM_MACHINE:-@DEFAULTMACHINE@}"
 if [[ $MACHINE == microvm ]]; then
   MACHINE_ARG="microvm,accel=$ACCEL,rtc=on" # rtc=on so the guest clock is correct for TLS
   BUS="device"                              # virtio-mmio transport
@@ -246,6 +253,12 @@ if [[ $SHARECONFIG == 1 ]]; then
       mkdir -p "$SEED/config-deref/$(dirname "$rel")"
       cp -rL "$link" "$SEED/config-deref/$rel"
     done < <(find "$CFGPATH" -type l -print0 2>/dev/null)
+    # Defense in depth: the per-link guard above matches only a *top-level*
+    # .credentials.json, but `cp -rL` of an escaping directory symlink can drag a nested
+    # one in. The OAuth secret must never reach the on-disk seed (it rides the read-only
+    # 9p mount only — §3.7), so strip any .credentials.json the staging produced, at any
+    # depth. Invariant check: grep the seed for the credential -> zero hits.
+    find "$SEED/config-deref" -name '.credentials.json' -delete 2>/dev/null || true
   fi
   [[ -f "$HOME/.claude.json" ]] && cp "$HOME/.claude.json" "$SEED/claude-json"
 fi
@@ -276,7 +289,7 @@ QEMU_ARGS=(
 # ---- boot ------------------------------------------------------------------
 # qemu runs headless in the background with stdio detached from the terminal so it never
 # touches the TTY the user's claude session will own.
-qemu-system-x86_64 "${QEMU_ARGS[@]}" </dev/null >"$TMP/qemu.log" 2>&1 &
+@QEMU@ "${QEMU_ARGS[@]}" </dev/null >"$TMP/qemu.log" 2>&1 &
 QEMU_PID=$!
 
 # In debug mode stream the guest console while it boots (killed before we hand the
