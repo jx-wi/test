@@ -107,6 +107,11 @@ These are the whole point of the project. Treat any change that weakens one as a
 
 ## Conventions
 
+- **Working `TODO.md`: commit automatically once all checks pass.** When working through a
+  `TODO.md` item, run the relevant checks (`bash -n`, the `host.sh` dry-run recipe, and — on a
+  Nix+KVM box — `nix flake check` / `bash tests/boot.sh` / a `--shell` pass for TTY changes); if
+  they're green, commit without stopping to ask per item. Still surface anything that can only be
+  verified on the Nix+KVM box so it gets checked there before being claimed done.
 - **Commit trailer (exact):** `Co-authored-by: Claude <noreply@anthropic.com>` — lowercase
   `authored-by`, bare `Claude`, no model name. This intentionally differs from the Claude
   Code CLI default; use *this* form.
