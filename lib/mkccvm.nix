@@ -110,6 +110,7 @@ let
         "@EGRESSALLOW@"
         "@EGRESSPORTS@"
         "@VERSION@"
+        "@STOREDISK@"
       ]
       [
         kernel
@@ -132,6 +133,7 @@ let
         (lib.concatStringsSep " " config.egressAllowlist)
         (lib.concatStringsSep " " (map toString config.egressPorts))
         version
+        config.storeDisk
       ]
       (builtins.readFile ../wrapper/ccvm.sh);
   };

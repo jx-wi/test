@@ -60,7 +60,7 @@ let
 
   seedSetup = pkgs.writeShellApplication {
     name = "ccvm-seed-setup";
-    runtimeInputs = [ pkgs.coreutils pkgs.util-linux pkgs.shadow pkgs.gnugrep pkgs.nftables pkgs.kmod ];
+    runtimeInputs = [ pkgs.coreutils pkgs.util-linux pkgs.shadow pkgs.gnugrep pkgs.nftables pkgs.kmod pkgs.cryptsetup pkgs.e2fsprogs ];
     text = ''
       seed=/run/ccvm-seed
       mkdir -p "$seed"
@@ -163,6 +163,46 @@ let
         install -d -m 700 -o ccvm -g users /home/ccvm/.claude
         mkdir -p /home/ccvm/.claude/projects
         mount -t 9p -o ${p9} ccvm-claude-projects /home/ccvm/.claude/projects || true
+      fi
+
+      # Opt-in encrypted ephemeral scratch (storeDisk). The host attached a raw SPARSE virtio-blk
+      # disk with serial=ccvm-scratch (so it resolves at /dev/disk/by-id/virtio-ccvm-scratch
+      # regardless of /dev ordering). We LUKS-format it FRESH every boot with a key generated in
+      # GUEST RAM — the key never crosses 9p, so the host only ever sees ciphertext (same spirit
+      # as the API key, §3.7) — open it, lay an ext4, and mount it at /scratch for the agent.
+      # Wipe-on-exit is cryptographic: the key dies with guest RAM at power-off, so the on-disk
+      # image is inert the instant qemu stops, even on a crash that skips the host-side rm.
+      # FAIL-OPEN throughout: any hiccup logs and continues WITHOUT /scratch (the agent still has
+      # tmpfs) — it must never fail this oneshot and block sshd. A LUKS header needs a few MiB, so
+      # the host caps the size; we use a fast pbkdf2 (the key is already 64 random bytes, so a
+      # memory-hard KDF would only slow boot — especially under TCG — for no added security).
+      if [ -f "$seed/scratch-disk" ]; then
+        modprobe dm_mod dm_crypt 2>/dev/null || true
+        dev=/dev/disk/by-id/virtio-ccvm-scratch
+        for _ in $(seq 1 50); do [ -e "$dev" ] && break; sleep 0.1; done
+        if [ -e "$dev" ]; then
+          keyf=/run/ccvm-scratch.key # tmpfs (RAM); never written to 9p, gone at power-off
+          ( umask 077; head -c 64 /dev/urandom >"$keyf" )
+          if cryptsetup luksFormat --batch-mode --type luks2 \
+               --pbkdf pbkdf2 --pbkdf-force-iterations 1000 "$dev" "$keyf" \
+             && cryptsetup open --type luks2 --key-file "$keyf" "$dev" ccvm-scratch; then
+            shred -u "$keyf" 2>/dev/null || rm -f "$keyf"
+            if mkfs.ext4 -q -F -E nodiscard /dev/mapper/ccvm-scratch \
+               && mkdir -p /scratch \
+               && mount /dev/mapper/ccvm-scratch /scratch; then
+              # fail-open: ownership tweaks must not abort the oneshot (set -e) and block sshd.
+              chown ccvm:users /scratch || true
+              chmod 0770 /scratch || true
+            else
+              echo "ccvm: scratch disk: mkfs/mount failed; continuing without /scratch" >&2
+            fi
+          else
+            echo "ccvm: scratch disk: LUKS setup failed; continuing without /scratch" >&2
+            rm -f "$keyf"
+          fi
+        else
+          echo "ccvm: scratch disk: $dev never appeared; continuing without /scratch" >&2
+        fi
       fi
 
       # Opt-in egress allowlist. The host (which has working DNS) resolved the configured

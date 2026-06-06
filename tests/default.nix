@@ -39,6 +39,7 @@ let
           "@EGRESSALLOW@"
           "@EGRESSPORTS@"
           "@VERSION@"
+          "@STOREDISK@"
         ]
         [
           "/dev/null" # KERNEL    } never read: the dry-run hook exits before boot.
@@ -64,6 +65,7 @@ let
           egressAllow # EGRESSALLOW (empty = open egress, the default)
           egressPorts # EGRESSPORTS
           "0.0.0-test" # VERSION (fixture; host.sh asserts --ccvm-version echoes it)
+          "" # STOREDISK (empty = no scratch disk, the default; host.sh opts in via CCVM_STORE_DISK)
         ]
         (builtins.readFile ../wrapper/ccvm.sh);
     };

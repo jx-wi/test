@@ -24,6 +24,7 @@ export CCVM_SHARE_CLAUDE_CONFIG="${CCVM_SHARE_CLAUDE_CONFIG:-0}"
 echo "building stub-claude ccvm wrappers (builds the guest closure; first run is slow)…" >&2
 WRAP="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix open)/bin/ccvm"
 WRAP_EGRESS="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix egress)/bin/ccvm"
+WRAP_SCRATCH="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix scratch)/bin/ccvm"
 
 # Deterministic git-config fixture so the shareGitConfig assertions don't depend on the
 # runner's real ~/.gitconfig. Point HOME here for the wrapper runs (set AFTER `nix build`, so
@@ -149,6 +150,28 @@ grep -qa '^EGRESS:denied:blocked$' <<<"$OUT" &&
   ok "egress allowlist: non-allowlisted host blocked" ||
   no "egress: non-allowlisted host NOT blocked — exfil channel open: $(grep -a '^EGRESS:' <<<"$OUT")"
 rm -rf "$PROJ_EG"
+
+# ---- storeDisk: /scratch is a writable, dm-crypt-backed mount ---------------
+# The guest LUKS-formats the attached sparse disk with a key it generates in its own RAM and
+# mounts it at /scratch. We host the image in a fresh tmp dir (and allow tmpfs, since the
+# runner's /tmp is often tmpfs — a real deployment uses ~/.cache, but for a 128M test image on
+# tmpfs that's fine). The stub asserts the mount is present, writable, and on a dm-crypt device.
+PROJ_SC="$(mktemp -d)"
+SCRATCH_TMP="$(mktemp -d)"
+OUT="$(CCVM_SCRATCH_DIR="$SCRATCH_TMP" CCVM_SCRATCH_ALLOW_TMPFS=1 run_capture "$WRAP_SCRATCH" "$PROJ_SC")"
+grep -qa '^SCRATCH:mounted$' <<<"$OUT" &&
+  ok "storeDisk: /scratch is mounted in the guest" ||
+  no "storeDisk: /scratch not mounted: $(grep -a '^SCRATCH:' <<<"$OUT")"
+grep -qa '^SCRATCH:writable$' <<<"$OUT" &&
+  ok "storeDisk: /scratch is writable by the agent" || no "storeDisk: /scratch not writable"
+grep -qa '^SCRATCH:encrypted$' <<<"$OUT" &&
+  ok "storeDisk: /scratch is backed by a dm-crypt (LUKS) device" ||
+  no "storeDisk: /scratch not on a dm-crypt device (host could read plaintext)"
+# Belt-and-suspenders: the wrapper's trap should have removed the image on exit.
+[ -z "$(find "$SCRATCH_TMP" -name 'scratch-*.img' 2>/dev/null)" ] &&
+  ok "storeDisk: scratch image removed on exit" ||
+  no "storeDisk: scratch image left behind after exit"
+rm -rf "$PROJ_SC" "$SCRATCH_TMP"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

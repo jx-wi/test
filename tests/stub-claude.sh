@@ -43,6 +43,23 @@ else
   echo "GIT:config-absent"
 fi
 [ -r "$HOME/.config/git/ignore" ] && echo "GIT:ignore-present"
+
+# storeDisk: the opt-in encrypted scratch should be a writable mount at /scratch backed by a
+# dm-crypt device. Report what landed so boot.sh can assert it survived a real boot. The crypt
+# check reads /sys unprivileged: the mapper device's dm/uuid is CRYPT-LUKS2-… for dm-crypt.
+if mountpoint -q /scratch 2>/dev/null; then
+  echo "SCRATCH:mounted"
+  if echo "scratch-$$" >/scratch/ccvm-scratch-write 2>/dev/null; then echo "SCRATCH:writable"; fi
+  dm="$(readlink -f /dev/mapper/ccvm-scratch 2>/dev/null)" # -> /dev/dm-N
+  if [ -n "$dm" ]; then
+    case "$(cat "/sys/class/block/$(basename "$dm")/dm/uuid" 2>/dev/null)" in
+      CRYPT-*) echo "SCRATCH:encrypted" ;;
+    esac
+  fi
+else
+  echo "SCRATCH:absent"
+fi
+
 # Egress probes (best-effort, short timeout). With open egress both reach; with the
 # example.com allowlist only the allowed host reaches and the other is blocked. boot.sh
 # asserts on these only in the egress scenario.

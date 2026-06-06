@@ -346,12 +346,19 @@ who wants anonymity runs Tor or a VPN on the host and the guest rides through it
 with no guest-side code. Egress *control* (where the agent may connect) belongs in ccvm;
 egress *anonymization* (how those packets reach the wire) belongs on the host.
 
-### 3.11 Encrypted ephemeral scratch disk (design + implementation plan — not yet built)
+### 3.11 Encrypted ephemeral scratch disk (`storeDisk`) — phase 1 implemented
 
-> **Status: not built yet.** The rationale below, plus the phased **implementation plan** at
-> the end of this section, are captured so the work can be executed directly on a Nix+KVM box.
-> Nothing here is wired into the wrapper/guest yet; it needs `cryptsetup` in the guest (and, for
-> phase 2, the initrd) and is unbuildable/untestable without a Nix+KVM box.
+> **Status: phase 1 implemented (generic encrypted `/scratch`); phase 2 (writable `/nix/store`
+> + in-VM `nix`) still planned.** The rationale and the full phased plan are below. Phase 1 is
+> wired end-to-end — option/token surface, wrapper image staging, the guest LUKS-format/open/
+> mount in the seed service, and host-side + boot tests — and **verified on a Nix+KVM box**
+> (2026-06-06): `nix flake check` clean, `tests/boot.sh` 21/21 incl. the `scratch` posture, and a
+> real `storeDisk="2G"` run showed `/scratch` as a writable dm-crypt mount (`lsblk`: `vdb →
+> ccvm-scratch (crypt)`) with the host image removed on exit. Two refinements landed during
+> implementation that the
+> plan below predates: the LUKS format uses a fast **pbkdf2** (the key is already 64 random
+> bytes, so a memory-hard KDF would only slow boot under TCG for no security gain), and a tmpfs
+> scratch dir is **refused** unless `CCVM_SCRATCH_ALLOW_TMPFS=1`.
 
 **The problem the RAM-only model can't solve.** ccvm's root is tmpfs and `/nix/store` is a
 read-only squashfs (§3.4). That is the right default — wipe-on-exit is a property of *physics*,

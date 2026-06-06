@@ -14,7 +14,7 @@ let
     inherit (cfg)
       package autoUpdateFiles memory cores extraPackages mountHostNixStore
       apiKeyVariable shareClaudeConfig persistClaudeProjects shareGitConfig extraClaudeMd
-      lockGuestMemory egressAllowlist egressPorts extraGuestModules;
+      lockGuestMemory storeDisk egressAllowlist egressPorts extraGuestModules;
   }).wrapper;
 in
 {
@@ -136,6 +136,25 @@ in
         current file-sharing mode (rw = edits are live on the host; overlay = edits are
         discarded on exit). Defaults to a sensible built-in blurb; set to "" to inject nothing,
         or replace it with your own. Per-run override: CCVM_CLAUDE_MD=<file> (empty disables).
+      '';
+    };
+
+    storeDisk = lib.mkOption {
+      type = lib.types.str;
+      default = defaults.storeDisk;
+      example = "16G";
+      description = ''
+        Opt-in encrypted ephemeral scratch disk. Empty (default) keeps the pure-RAM model. A
+        size string (e.g. "16G", "512M") attaches a raw SPARSE virtio-blk image — created in a
+        disk-backed dir on the host, NOT tmpfs — which the guest LUKS-encrypts with a key it
+        generates in its own RAM (the key never crosses 9p; the host only ever sees ciphertext)
+        and mounts at /scratch for large writable data that would otherwise exhaust the
+        RAM-backed tmpfs (big build outputs, node_modules/target/.venv, caches). Wiped on exit:
+        the key dies with guest RAM (leaving inert ciphertext) and the host image is removed.
+        The host scratch dir is ''${XDG_CACHE_HOME:-~/.cache}/ccvm by default (override with
+        CCVM_SCRATCH_DIR); ccvm refuses a tmpfs target unless CCVM_SCRATCH_ALLOW_TMPFS=1.
+        Per-run override: CCVM_STORE_DISK=<size>|0. (Phase 1: generic /scratch. A future
+        storeDiskMode would also back a writable /nix/store — see design §3.11.)
       '';
     };
 

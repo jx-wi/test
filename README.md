@@ -117,6 +117,7 @@ Those `ccvm` flags are intercepted by the wrapper and are **not** forwarded to c
 | `shareGitConfig` | `true` | Stage a **sanitized** copy of your global git config into the VM (`~/.config/git/config`) so in-VM `git` commits as you, with your aliases and global ignores. Host-only `/nix/store` tool paths (editor/pager/delta/gh helper), all `credential.*`, and commit signing are stripped — nothing secret crosses, nothing dangles. See [Git config in the VM](#git-config-in-the-vm). Per-run: `CCVM_SHARE_GIT_CONFIG=0\|1`. |
 | `extraClaudeMd` | *(built-in blurb)* | Markdown staged as the guest's `~/.claude/CLAUDE.md` so the agent knows it's inside ccvm (ephemeral, sandboxed, only the project dir shared) and adapts. Appended to any host-shared `CLAUDE.md`; the wrapper prepends a runtime note about the file-sharing mode. Set `""` to disable, or replace with your own. See [Telling the agent it's in ccvm](#telling-the-agent-its-in-ccvm). Per-run: `CCVM_CLAUDE_MD=<file>`. |
 | `lockGuestMemory` | `false` | mlock the guest RAM (QEMU `mem-lock=on`) so it can't be paged to the host's (possibly unencrypted) swap — keeps in-VM secrets off persistent storage. Needs sufficient `RLIMIT_MEMLOCK`. Per-run: `CCVM_MLOCK=0\|1`. |
+| `storeDisk` | `""` | **Opt-in.** Empty keeps the pure-RAM model. A size (e.g. `"16G"`) attaches a sparse, **encrypted** ephemeral disk mounted at `/scratch` for large writable data that would otherwise exhaust the RAM-backed tmpfs (build outputs, `node_modules`/`target`/`.venv`, caches). The guest generates the LUKS key in its own RAM — the host only ever sees ciphertext — and the disk is wiped on exit (key dies with guest RAM + the image is removed). Host image lives in `${XDG_CACHE_HOME:-~/.cache}/ccvm` (override `CCVM_SCRATCH_DIR`); a tmpfs target is refused unless `CCVM_SCRATCH_ALLOW_TMPFS=1`. Per-run: `CCVM_STORE_DISK=<size>\|0`. See [Encrypted scratch disk](#encrypted-scratch-disk-storedisk). |
 | `egressAllowlist` | `[ ]` | **Opt-in.** Empty = open egress (native default). Non-empty switches the guest to a default-deny egress firewall allowing only these FQDN/IP/CIDR destinations (`api.anthropic.com` auto-included) — closes the *direct* exfiltration channel (DNS-to-stub-resolver stays open as a residual channel). See [Threat model & network egress](#threat-model--network-egress). |
 | `egressPorts` | `[ 443 ]` | Destination ports the allowlist permits (only when `egressAllowlist` is set). Add `80` for plain-HTTP mirrors. |
 | `extraGuestModules` | `[ ]` | Extra NixOS modules merged into the guest (escape hatch). |
@@ -139,6 +140,9 @@ Those `ccvm` flags are intercepted by the wrapper and are **not** forwarded to c
 | `CCVM_MACHINE=q35` | Use the q35 machine type instead of the default `microvm`. |
 | `ccvm --ccvm-help` | List ccvm's own flags + env knobs and exit (bare `--help` still forwards to claude). |
 | `ccvm --ccvm-version` | Print the ccvm version and exit (bare `--version` still forwards to claude). |
+| `CCVM_STORE_DISK=<size>\|0` | Attach (or disable) the encrypted `/scratch` disk for one run (overrides the baked `storeDisk`). |
+| `CCVM_SCRATCH_DIR=<dir>` | Where the host keeps the (sparse, encrypted) scratch image — must be disk-backed; default `${XDG_CACHE_HOME:-~/.cache}/ccvm`. |
+| `CCVM_SCRATCH_ALLOW_TMPFS=1` | Permit a tmpfs scratch dir (normally refused, since a RAM-backed "disk" defeats the point). For tests / unusual setups. |
 
 ### Locking guest memory (`lockGuestMemory` / `CCVM_MLOCK`)
 
@@ -166,6 +170,34 @@ If you can't or don't want to raise the limit, leave `lockGuestMemory` off (the 
 pass `CCVM_MLOCK=0` for a single run — guest RAM may then reach host swap, the only
 trade-off. The wrapper runs a preflight check and prints a loud warning (with these same
 fixes) when the limit looks too low.
+
+### Encrypted scratch disk (`storeDisk`)
+
+ccvm is RAM-only by default: the root is tmpfs and `/nix/store` is a read-only image, so there
+is no persistent disk (that's what makes wipe-on-exit a property of physics, not a cleanup
+routine). The trade-off is that **large writable data** — a big `node_modules`/`target`/`.venv`,
+hefty build outputs — competes with the guest's RAM and can OOM the tmpfs at the default
+`memory = 4096`.
+
+`storeDisk = "16G"` (off by default) fixes that without giving up wipe-on-exit. The host attaches
+a **sparse** disk image (it only consumes what's actually written) and the **guest** encrypts it:
+
+- The LUKS key is generated **inside the guest, in RAM**, and `cryptsetup luksFormat`s the device
+  fresh on every boot. The key never crosses the 9p boundary — **the host only ever sees
+  ciphertext**, the same principle as the API key never touching disk.
+- It's mounted at **`/scratch`**, owned by the agent. Point heavy writers at it (`TMPDIR=/scratch/tmp`,
+  `CARGO_TARGET_DIR=/scratch/cargo`, an `npm`/`pip` cache, …).
+- **Wipe-on-exit is cryptographic:** the key dies with guest RAM at power-off, so the image is
+  inert ciphertext the instant the VM stops — even on a crash that skips cleanup. The wrapper also
+  removes the image on exit as belt-and-suspenders.
+
+The image lives in a **disk-backed** dir (`${XDG_CACHE_HOME:-~/.cache}/ccvm`; override with
+`CCVM_SCRATCH_DIR`) — never tmpfs, which would put the "disk" back in RAM and defeat the purpose;
+ccvm refuses a tmpfs target unless you set `CCVM_SCRATCH_ALLOW_TMPFS=1`. Per run: `CCVM_STORE_DISK=<size>`
+(or `=0` to disable). Complements `mountHostNixStore`: if a big closure is already realised in the
+**host** store, share it read-only at zero RAM cost instead; the scratch disk is for when the guest
+must **write** large data ephemerally. (Phase 1 ships the generic `/scratch`; a future option will
+also back a writable `/nix/store` for in-VM `nix develop` — see [design §3.11](docs/design.md).)
 
 ### Git config in the VM (`shareGitConfig` / `CCVM_SHARE_GIT_CONFIG`)
 

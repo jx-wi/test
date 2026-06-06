@@ -30,6 +30,7 @@ MEMLOCK="@MEMLOCK@" # 1 = mlock guest RAM (lockGuestMemory) so it can't hit host
 EGRESSALLOW="@EGRESSALLOW@" # space-separated FQDN/IP/CIDR allowlist; empty = open egress (default)
 EGRESSPORTS="@EGRESSPORTS@" # space-separated dst ports the allowlist permits (default 443)
 VERSION="@VERSION@"         # ccvm's own version string (baked from lib/mkccvm.nix)
+STOREDISK="@STOREDISK@"     # ""=off; a size (16G) attaches an encrypted ephemeral /scratch disk
 
 # ---- helpers ---------------------------------------------------------------
 warn() { printf 'ccvm: %s\n' "$*" >&2; }
@@ -137,6 +138,18 @@ cleanup() {
       : # dry run prints and keeps $TMP itself; leave it for the caller to inspect/remove.
     else
       rm -rf "$TMP"
+    fi
+  fi
+  # The encrypted scratch image (storeDisk) lives OUTSIDE $TMP (a disk-backed dir, not the
+  # tmpfs scratch). Its real erasure is cryptographic — the LUKS key died with guest RAM, so
+  # the file is inert ciphertext the instant qemu stops — but remove it too (belt + suspenders).
+  if [[ -n ${SCRATCH_IMG:-} ]]; then
+    if [[ ${DEBUG:-0} == 1 ]]; then
+      warn "debug mode — scratch disk image kept at $SCRATCH_IMG (inert: the LUKS key is gone)"
+    elif [[ ${DRYRUN:-0} == 1 ]]; then
+      : # dry run keeps it for the caller (host.sh asserts on it, then removes).
+    else
+      rm -f "$SCRATCH_IMG"
     fi
   fi
 }
@@ -273,6 +286,15 @@ esac
 case "${CCVM_MLOCK:-}" in
   1 | true | yes) MEMLOCK=1 ;;
   0 | false | no) MEMLOCK=0 ;;
+esac
+
+# Scratch-disk precedence: CCVM_STORE_DISK overrides the baked storeDisk for one run. A size
+# (e.g. 16G) turns it on; 0/off/no/empty turns it off. Unlike the boolean toggles this carries a
+# value, so we match the off-words explicitly and otherwise take the string as the size.
+case "${CCVM_STORE_DISK:-__unset__}" in
+  __unset__) : ;; # not set — keep the baked default
+  0 | off | no | false | "") STOREDISK="" ;;
+  *) STOREDISK="$CCVM_STORE_DISK" ;;
 esac
 
 # Guest RAM precedence: CCVM_MEMORY (MiB) overrides the baked `memory` default for one run.
@@ -461,6 +483,40 @@ if [[ $PERSISTPROJECTS == 1 ]]; then
   printf '1' >"$SEED/persist-claude-projects"
 fi
 
+# ---- encrypted ephemeral scratch disk (opt-in: storeDisk) ------------------
+# A size in STOREDISK (e.g. 16G) attaches a raw SPARSE virtio-blk image the guest will
+# LUKS-encrypt with a key it generates in its OWN RAM — the key never crosses 9p, so the host
+# only ever sees ciphertext (same spirit as the API key, §3.7). It is mounted at /scratch for
+# large writable data that would OOM the RAM-backed tmpfs (build outputs, node_modules, caches).
+# The image MUST live in a disk-backed dir, never tmpfs/$TMP — putting the "disk" back in RAM
+# defeats the entire point — so we refuse a tmpfs target (override CCVM_SCRATCH_ALLOW_TMPFS=1).
+# Wiped on exit cryptographically (key dies with guest RAM) and via the cleanup rm.
+SCRATCH_ARGS=()
+SCRATCH_IMG=""
+if [[ -n ${STOREDISK// /} ]]; then
+  [[ $STOREDISK =~ ^[1-9][0-9]*[KMGT]?$ ]] ||
+    die "storeDisk must be a size like 16G, 512M or a byte count (got '$STOREDISK')"
+  SCRATCH_DIR="${CCVM_SCRATCH_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/ccvm}"
+  mkdir -p "$SCRATCH_DIR" || die "could not create scratch dir '$SCRATCH_DIR'"
+  if [[ ${CCVM_SCRATCH_ALLOW_TMPFS:-0} != 1 ]]; then
+    fstype="$(stat -f -c %T "$SCRATCH_DIR" 2>/dev/null || echo unknown)"
+    case "$fstype" in
+      tmpfs | ramfs)
+        die "scratch dir '$SCRATCH_DIR' is on $fstype (RAM) — a disk-backed dir is the whole point; point CCVM_SCRATCH_DIR at real disk, or set CCVM_SCRATCH_ALLOW_TMPFS=1 to override" ;;
+    esac
+  fi
+  # Sparse: only consumes what the guest actually writes, up to this cap. Unique per run so
+  # concurrent ccvm sessions don't collide; the trap removes exactly this file.
+  SCRATCH_IMG="$SCRATCH_DIR/scratch-$$-$RANDOM.img"
+  truncate -s "$STOREDISK" "$SCRATCH_IMG" || die "could not create scratch image '$SCRATCH_IMG'"
+  # serial=ccvm-scratch so the guest finds it at /dev/disk/by-id/virtio-ccvm-scratch regardless
+  # of disk ordering (with mountHostNixStore the store is a 9p mount, so this is /dev/vda; else
+  # /dev/vdb — by-id avoids hardcoding either).
+  SCRATCH_ARGS+=(-drive "id=scratch,file=$SCRATCH_IMG,format=raw,if=none")
+  SCRATCH_ARGS+=(-device "virtio-blk-$BUS,drive=scratch,serial=ccvm-scratch")
+  printf '1' >"$SEED/scratch-disk"
+fi
+
 # ---- git config passthrough (default on) -----------------------------------
 # Native devex: in-VM `git` should commit as you, with your aliases and global ignores —
 # like native claude. We stage a SANITIZED copy of your GLOBAL git config into the seed (the
@@ -532,6 +588,9 @@ if [[ -n $CLAUDEMD && -r $CLAUDEMD ]]; then
     else
       printf 'Your session history and memory do NOT persist across runs — they live only in this throwaway VM and are discarded on exit. So strongly PREFER writing durable information into the codebase (CLAUDE.md, README, docs/, code) and committing it, over saving it to memory. (Set CCVM_PERSIST_PROJECTS=1 to persist memory + resumable sessions.)\n\n'
     fi
+    if [[ -n ${STOREDISK// /} ]]; then
+      printf 'A disk-backed, encrypted scratch area is mounted at /scratch — use it for LARGE ephemeral writes (build outputs, node_modules, target/, caches) that would otherwise exhaust the RAM-backed filesystem. It is wiped on exit like everything else, so nothing there is durable.\n\n'
+    fi
     cat "$CLAUDEMD"
   } >"$SEED/claude-md"
 fi
@@ -598,6 +657,7 @@ QEMU_ARGS=(
   -device "virtio-9p-$BUS,fsdev=ws,mount_tag=ccvm-workspace"
   "${CONFIG_ARGS[@]}"
   "${PROJECTS_ARGS[@]}"
+  "${SCRATCH_ARGS[@]}"
   -device "virtio-rng-$BUS"
   -display none
   -monitor none

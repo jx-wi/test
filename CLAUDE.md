@@ -46,6 +46,16 @@ These are the whole point of the project. Treat any change that weakens one as a
   does survives exit except host-project edits while `autoUpdateFiles=true` — and, when the
   opt-in `persistClaudeProjects` is on, writes under `~/.claude/projects` (session transcripts
   + memory). Both are deliberate, narrowly-scoped write-throughs, not a general persistent disk.
+  The opt-in `storeDisk` scratch is **not** an exception: it is an *ephemeral* disk, wiped on
+  exit (see next bullet).
+- **`storeDisk` scratch: the LUKS key is guest-only, the disk is wiped on exit.** The host
+  attaches a sparse image but **never** the key — the guest generates it from `/dev/urandom` in
+  its own RAM and `luksFormat`s the device fresh every boot, so the host only ever sees
+  ciphertext (verify: no key file in the seed; the wrapper writes only the size marker). Wipe-on-
+  exit is cryptographic (the key dies with guest RAM → inert ciphertext even on a crash), with
+  the trap `rm` as belt-and-suspenders. The host image MUST live in a disk-backed dir, never
+  tmpfs/`$TMP` (that would put the "disk" back in RAM) — the wrapper refuses a tmpfs target
+  unless `CCVM_SCRATCH_ALLOW_TMPFS=1`. Never stage the key through the seed.
 - **`autoUpdateFiles=false` means genuinely read-only.** The host tree is the 9p **lower**;
   edits land in a tmpfs **upper** and must not reach the host.
 - **Only the CWD is shared.** No `~/.ssh`, `~/.aws`, or home dir crosses the boundary.
