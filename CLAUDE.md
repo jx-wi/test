@@ -92,7 +92,8 @@ These are the whole point of the project. Treat any change that weakens one as a
   — the workspace 9p share and SSH port — are **not** baked; the wrapper builds those QEMU
   args at runtime (the microvm.nix "runtime-share trap", design §3.8).
 - **Runtime override pattern:** a `CCVM_*` env var overrides the baked default for one run
-  (`CCVM_AUTOUPDATE`, `CCVM_SHARE_CONFIG`); an explicit `ccvm` flag wins over the env var.
+  (`CCVM_AUTOUPDATE`, `CCVM_SHARE_CONFIG`, `CCVM_MLOCK`); an explicit `ccvm` flag wins over
+  the env var.
 - **Forwarded argv is NUL-separated** on the wire (`claude-args` in the seed, read with
   `mapfile -d ""`); spaces/quotes/globs survive intact. Never rebuild the argv by
   string-splitting.

@@ -10,7 +10,7 @@ let
   ccvmPkg = (mkCcvm {
     inherit (cfg)
       package autoUpdateFiles memory cores extraPackages mountHostNixStore
-      apiKeyVariable shareHostConfig extraGuestModules;
+      apiKeyVariable shareHostConfig lockGuestMemory extraGuestModules;
   }).wrapper;
 in
 {
@@ -78,6 +78,18 @@ in
         Claude's writes go to an ephemeral overlay and do not persist back to the host; the
         OAuth credential is exposed read-only and never copied to disk. false: share nothing
         from ~/.claude (more isolated). Per-run override: `CCVM_SHARE_CONFIG=0|1`.
+      '';
+    };
+
+    lockGuestMemory = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Lock the VM's guest RAM into host memory (QEMU -overcommit mem-lock=on) so it can
+        never be paged out to the host's (possibly unencrypted) swap — keeping in-VM secrets
+        (the API key in the guest environment, /login credentials in tmpfs) off host disk.
+        Off by default; requires a large enough RLIMIT_MEMLOCK or QEMU will not start.
+        Per-run override: CCVM_MLOCK=0|1.
       '';
     };
 

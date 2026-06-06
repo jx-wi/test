@@ -197,6 +197,14 @@ the TUI. No inbound connection to the guest is needed (the code is pasted, not d
 a callback), so nothing about the network model changes. The credentials claude writes to
 its tmpfs `~/.claude` are, like everything else in the VM, discarded on exit.
 
+**Guest RAM vs. host swap.** Everything secret in the VM lives in guest RAM — the API key in
+the launcher's environment, any `/login` credentials in tmpfs. That RAM is ordinary host
+process memory, so a memory-pressured host kernel *could* page it out to swap. `lockGuestMemory`
+(off by default; `CCVM_MLOCK=1` for one run) starts QEMU with `-overcommit mem-lock=on`, which
+mlocks the guest so it can never reach the host's possibly-unencrypted swap. It needs a large
+enough `RLIMIT_MEMLOCK` or QEMU won't start. This — not full-disk encryption, which is moot
+when there is no persistent disk — is the relevant at-rest protection for an all-RAM VM.
+
 ### 3.8 The microvm.nix runtime-share trap
 
 It is tempting to declare the workspace 9p mount inside the guest NixOS config (or to use

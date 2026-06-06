@@ -113,6 +113,7 @@ Those `ccvm` flags are intercepted by the wrapper and are **not** forwarded to c
 | `mountHostNixStore` | `false` | Share host `/nix/store` (ro) instead of a self-contained image — smaller/faster, less isolated. |
 | `apiKeyVariable` | `"ANTHROPIC_API_KEY"` | Host env var carrying the key; passed only via SSH `SendEnv`. |
 | `shareHostConfig` | `true` | Mount the host `~/.claude` (ro) so the VM reuses your login, settings, commands and memory (home-manager symlinks are dereferenced); writes stay ephemeral. Per-run: `CCVM_SHARE_CONFIG=0\|1`. |
+| `lockGuestMemory` | `false` | mlock the guest RAM (QEMU `mem-lock=on`) so it can't be paged to the host's (possibly unencrypted) swap — keeps in-VM secrets off persistent storage. Needs sufficient `RLIMIT_MEMLOCK`. Per-run: `CCVM_MLOCK=0\|1`. |
 | `extraGuestModules` | `[ ]` | Extra NixOS modules merged into the guest (escape hatch). |
 
 ### Runtime environment knobs
@@ -122,6 +123,7 @@ Those `ccvm` flags are intercepted by the wrapper and are **not** forwarded to c
 | `ccvm --auto-update-files` / `--no-auto-update-files` | Force file-sharing mode for one run (wins over `CCVM_AUTOUPDATE`); intercepted, not forwarded to claude. |
 | `CCVM_AUTOUPDATE=1\|0` | Override the file-sharing mode for one run. |
 | `CCVM_SHARE_CONFIG=1\|0` | Override host `~/.claude` sharing for one run (wins over the baked `shareHostConfig`). |
+| `CCVM_MLOCK=1\|0` | Lock (or unlock) the guest RAM for one run (overrides the baked `lockGuestMemory`). |
 | `CCVM_SHELL=1` / `ccvm --shell` | Drop into a debug **zsh** in the guest instead of claude. |
 | `CCVM_DEBUG=1` / `ccvm --ccvm-debug` | Stream the guest console while booting; keep the scratch dir on exit. |
 | `CCVM_ACCEL=tcg` | Force software emulation (for hosts where `/dev/kvm` exists but is broken). |

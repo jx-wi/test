@@ -22,6 +22,7 @@ let
     mountHostNixStore = false;
     apiKeyVariable = "ANTHROPIC_API_KEY";
     shareHostConfig = true;
+    lockGuestMemory = false;
     extraGuestModules = [ ];
   };
 in
@@ -88,6 +89,7 @@ let
         "@HOSTSTOREPATH@"
         "@QEMU@"
         "@DEFAULTMACHINE@"
+        "@MEMLOCK@"
       ]
       [
         kernel
@@ -103,6 +105,7 @@ let
         (builtins.storeDir)
         qemuBin
         defaultMachine
+        (if config.lockGuestMemory then "1" else "0")
       ]
       (builtins.readFile ../wrapper/ccvm.sh);
   };

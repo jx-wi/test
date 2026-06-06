@@ -23,6 +23,7 @@ SHARECONFIG="@SHARECONFIG@"
 MOUNTHOSTSTORE="@MOUNTHOSTSTORE@"
 HOSTSTOREPATH="@HOSTSTOREPATH@"
 MODE="@MODE@" # rw (autoUpdateFiles=true, default — mirrors native claude) | overlay (secure)
+MEMLOCK="@MEMLOCK@" # 1 = mlock guest RAM (lockGuestMemory) so it can't hit host swap; 0 = off
 
 # ---- helpers ---------------------------------------------------------------
 warn() { printf 'ccvm: %s\n' "$*" >&2; }
@@ -134,6 +135,13 @@ case "${CCVM_SHARE_CONFIG:-}" in
   0 | false | no) SHARECONFIG=0 ;;
 esac
 
+# Guest-memory locking precedence: CCVM_MLOCK overrides the baked lockGuestMemory default for
+# one run, same override pattern as the toggles above.
+case "${CCVM_MLOCK:-}" in
+  1 | true | yes) MEMLOCK=1 ;;
+  0 | false | no) MEMLOCK=0 ;;
+esac
+
 # ---- preflight -------------------------------------------------------------
 WORKDIR="$PWD"
 [[ -d $WORKDIR ]] || die "current directory '$WORKDIR' is not a directory"
@@ -160,6 +168,15 @@ fi
 # that way lives only in the VM's tmpfs and evaporates on exit (ephemeral, by design).
 if [[ $SHELL_MODE != 1 && $SHARECONFIG != 1 && -z ${!APIKEYVAR:-} ]]; then
   warn "\$$APIKEYVAR is not set and shareHostConfig is off — starting Claude unauthenticated. Run /login inside the VM for web auth (its credentials stay in the VM and vanish on exit)."
+fi
+
+# mlock preflight: QEMU started with mem-lock=on aborts if it cannot lock the guest RAM, so
+# surface a clear hint early instead of a cryptic qemu failure when RLIMIT_MEMLOCK is too low.
+if [[ $MEMLOCK == 1 ]]; then
+  memlock_kib="$(ulimit -l)"
+  if [[ $memlock_kib != unlimited ]] && ((memlock_kib < MEMORY * 1024)); then
+    warn "lockGuestMemory is on but RLIMIT_MEMLOCK is ${memlock_kib} KiB (< ${MEMORY} MiB guest) — QEMU may fail to start. Raise it (e.g. 'ulimit -l unlimited' or a higher systemd LimitMEMLOCK), or set CCVM_MLOCK=0 for this run."
+  fi
 fi
 
 # ---- scratch dir + trap ----------------------------------------------------
@@ -285,6 +302,12 @@ QEMU_ARGS=(
   -serial "file:$TMP/console.log"
   -no-reboot
 )
+
+# Optionally mlock the guest RAM (lockGuestMemory / CCVM_MLOCK) so it can never be paged out
+# to the host's possibly-unencrypted swap — keeping in-VM secrets (the API key in the guest
+# environment, /login credentials in tmpfs) off host disk. Off by default; QEMU aborts at
+# startup if RLIMIT_MEMLOCK is too small (see the preflight warning above).
+[[ $MEMLOCK == 1 ]] && QEMU_ARGS+=(-overcommit mem-lock=on)
 
 # ---- boot ------------------------------------------------------------------
 # qemu runs headless in the background with stdio detached from the terminal so it never
