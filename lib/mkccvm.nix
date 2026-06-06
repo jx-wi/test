@@ -83,8 +83,21 @@ let
   # Kernel cmdline for direct boot. init= points into the (now mounted) read-only store.
   append = lib.concatStringsSep " " (gc.boot.kernelParams ++ [ "init=${toplevel}/init" ]);
 
+  # Package metadata. Surfaced on the wrapper derivation (so `nix search` / `nix run` see a
+  # description and the right binary) and reused by the flake's `apps` outputs to silence the
+  # `nix flake check` "lacks attribute 'meta'" warnings. `mainProgram` matches the /bin name.
+  meta = {
+    description = "Run Claude Code in a throw-away, RAM-only QEMU microVM";
+    homepage = "https://github.com/jx-wi/ccvm";
+    license = lib.licenses.mit;
+    mainProgram = "ccvm";
+    maintainers = [{ github = "jx-wi"; name = "jx-wi"; }];
+    platforms = lib.platforms.linux;
+  };
+
   wrapper = pkgs.writeShellApplication {
     name = "ccvm";
+    inherit meta;
     runtimeInputs = with pkgs; [ qemu coreutils openssh findutils getent git ];
     text = builtins.replaceStrings
       [
@@ -129,6 +142,6 @@ let
   };
 in
 {
-  inherit wrapper guestSystem toplevel storeImage append kernel initrd config;
+  inherit wrapper guestSystem toplevel storeImage append kernel initrd config meta;
   kernelParams = gc.boot.kernelParams;
 }

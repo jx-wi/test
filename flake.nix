@@ -29,16 +29,20 @@
         guest-store = partsAll.${system}.storeImage; # buildable artifact for checks
       });
 
-      apps = forAllSystems (system: {
-        default = {
-          type = "app";
-          program = "${partsAll.${system}.wrapper}/bin/ccvm";
-        };
-        ccvm = {
-          type = "app";
-          program = "${partsAll.${system}.wrapper}/bin/ccvm";
-        };
-      });
+      apps = forAllSystems (system:
+        let
+          # `meta` on an app silences the `nix flake check` "lacks attribute 'meta'" warning
+          # and gives `nix run`/search a description. Reuse the wrapper's package meta.
+          app = {
+            type = "app";
+            program = "${partsAll.${system}.wrapper}/bin/ccvm";
+            meta = partsAll.${system}.meta;
+          };
+        in
+        {
+          default = app;
+          ccvm = app;
+        });
 
       devShells = forAllSystems (system:
         let pkgs = pkgsFor system; in {

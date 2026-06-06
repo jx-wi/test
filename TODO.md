@@ -233,11 +233,13 @@ so far are local-only.
   `bash tests/boot.sh` 7/7 clean on the Nix+KVM box.
 - ⬜ Dedupe default values between `lib/mkccvm.nix` `defaults` and `modules/home-manager.nix`
   option defaults (two sources of truth for `memory`/`cores`/`shareClaudeConfig`/… → drift risk).
-- ⬜ **Add `meta` info to the flake.** `nix flake check` warns `app 'apps.x86_64-linux.ccvm'`
-  and `…default` "lacks attribute 'meta'". Add `meta` (description/license/maintainers/
-  mainProgram) to the flake's `packages`/`apps` outputs to silence it and make `nix run`/search
-  metadata correct. (Separate from the `homeManagerModules`/`ccvmParts` "unknown flake output"
-  warnings, which are pre-existing and cosmetic per CLAUDE.md.)
+- ✅ **Add `meta` info to the flake.** `meta` (description/homepage/license=MIT/mainProgram/
+  maintainers/platforms) defined once in `lib/mkccvm.nix`, set on the wrapper derivation (via
+  `writeShellApplication`'s `meta` arg) and re-exported as `parts.meta`, which the flake's `apps`
+  (`ccvm` + `default`) reuse — silences the two "lacks attribute 'meta'" warnings and fixes
+  `nix run`/search metadata. (The `homeManagerModules`/`ccvmParts` "unknown flake output"
+  warnings are separate, pre-existing, and cosmetic per CLAUDE.md.) NEEDS `nix flake check` on
+  the Nix box to confirm the two warnings are gone.
 
 ---
 
