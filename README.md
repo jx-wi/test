@@ -114,6 +114,8 @@ Those `ccvm` flags are intercepted by the wrapper and are **not** forwarded to c
 | `apiKeyVariable` | `"ANTHROPIC_API_KEY"` | Host env var carrying the key; passed only via SSH `SendEnv`. |
 | `shareHostConfig` | `true` | Mount the host `~/.claude` (ro) so the VM reuses your login, settings, commands and memory (home-manager symlinks are dereferenced); writes stay ephemeral. Per-run: `CCVM_SHARE_CONFIG=0\|1`. |
 | `lockGuestMemory` | `false` | mlock the guest RAM (QEMU `mem-lock=on`) so it can't be paged to the host's (possibly unencrypted) swap — keeps in-VM secrets off persistent storage. Needs sufficient `RLIMIT_MEMLOCK`. Per-run: `CCVM_MLOCK=0\|1`. |
+| `egressAllowlist` | `[ ]` | **Opt-in.** Empty = open egress (native default). Non-empty switches the guest to a default-deny egress firewall allowing only these FQDN/IP/CIDR destinations (+ DNS; `api.anthropic.com` auto-included) — closes the exfiltration channel. See [Threat model & network egress](#threat-model--network-egress). |
+| `egressPorts` | `[ 443 ]` | Destination ports the allowlist permits (only when `egressAllowlist` is set). Add `80` for plain-HTTP mirrors. |
 | `extraGuestModules` | `[ ]` | Extra NixOS modules merged into the guest (escape hatch). |
 
 ### Runtime environment knobs
@@ -158,6 +160,48 @@ fixes) when the limit looks too low.
 
 ---
 
+## Threat model & network egress
+
+ccvm contains the agent's effect on your **filesystem** (only the CWD is shared; the rest of
+the host is invisible) and protects your **API key** (it never hits disk/argv; see above).
+What it does **not** restrict by default is the **network**: like native `claude`, the guest
+can reach anything outbound, so `npm`/`pip`/`git clone`/`WebFetch` all work. That's the
+deliberate native-mirroring default — and it leaves one real gap worth understanding:
+
+> **In the default posture, a prompt-injected or compromised agent could exfiltrate data.**
+> With `shareHostConfig = true` (default) your host `~/.claude` — *including the OAuth
+> credential* — is readable inside the VM, and with open egress the agent could POST the
+> project tree or that credential to an arbitrary host. The VM still can't touch your host
+> filesystem, but containment ≠ exfiltration-proof.
+
+This is inherent to mirroring native `claude` (reusing your host login *means* the credential
+is in the VM). Your options, cheapest first:
+
+- **Authenticate with an API key instead of OAuth** (`export ANTHROPIC_API_KEY=…`, and
+  `shareHostConfig = false`): then no long-lived OAuth credential is exposed to the agent at
+  all — the key rides the SSH channel and is the only secret in the VM.
+- **Lock down the network with `egressAllowlist`** (opt-in; the default stays open so native
+  behaviour is unchanged):
+
+  ```nix
+  programs.ccvm.egressAllowlist = [ "github.com" "registry.npmjs.org" "10.0.0.0/8" ];
+  programs.ccvm.egressPorts     = [ 443 ];   # add 80 for plain-HTTP mirrors
+  ```
+
+  A non-empty list switches the guest to a **default-deny** egress firewall (nftables) that
+  permits only those destinations on those ports, plus DNS. `api.anthropic.com` is always
+  auto-included so authentication never breaks. FQDNs are resolved **on the host at launch**
+  into IP rules — reliable for a session, but it IP-pins CDN-fronted hosts (an SNI-filtering
+  proxy is the planned stronger layer; see [design §3.10](docs/design.md)). If the rules fail
+  to apply, the guest **fails closed** (denies all egress) rather than silently leaving it
+  open. Combine with `autoUpdateFiles = false` to also keep project edits in the VM.
+
+What ccvm deliberately does **not** do is anonymize traffic (no Tor): the dominant flow is the
+Anthropic API authenticated as you, so anonymity is self-defeating and orthogonal. If you want
+it, run a VPN/Tor on the *host* and the guest rides through it for free (design §3.10).
+
+---
+
 ## How it works (the short version)
 
 A Nix builder (`lib/mkccvm.nix`) evaluates a minimal NixOS guest and bakes its kernel,
@@ -183,12 +227,15 @@ ccvm's guarantees are checked at three levels:
   loop, then stops before booting) and asserts the security-critical invariants with no VM:
   the `ANTHROPIC_API_KEY` never reaches the seed (it rides `SendEnv` over SSH only), the
   OAuth credential is never staged into it (top-level *and* nested), escaping host-config
-  symlinks *are* dereferenced, the forwarded argv round-trips byte-for-byte, and the
-  ccvm-only flags are consumed (not forwarded) and select the mode.
+  symlinks *are* dereferenced, the forwarded argv round-trips byte-for-byte, the ccvm-only
+  flags are consumed (not forwarded) and select the mode, and the egress allowlist stages
+  correctly (default = open; IPs/CIDRs verbatim, FQDNs resolved, ports as an nft list —
+  [`tests/egress.sh`](tests/egress.sh)).
 - **Full boot, locally.** [`tests/boot.sh`](tests/boot.sh) builds a ccvm with a stub `claude`
   and boots the real VM (TCG by default, so it runs without KVM) to confirm the argv reaches
-  claude and — the load-bearing pair — that overlay mode keeps a guest edit ephemeral while
-  rw mode lands it on the host. Needs a working VM, so it's a local gate, not a CI check.
+  claude, that overlay mode keeps a guest edit ephemeral while rw mode lands it on the host,
+  and that the egress allowlist actually blocks a non-allowlisted host while permitting an
+  allowlisted one. Needs a working VM, so it's a local gate, not a CI check.
 - **Terminal fidelity, by a human.** Resize/`vim`/`less`/vi-mode behaviour is a manual smoke
   test by nature:
 

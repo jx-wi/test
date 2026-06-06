@@ -229,40 +229,43 @@ pins it (`StrictHostKeyChecking=yes`, known_hosts entry written before connect) 
 is no blind trust-on-first-use. The firewall is off because slirp already NATs the guest
 off any real network and nothing should be reaching *in* except the forwarded port.
 
-### 3.10 Egress is open; an allowlist is the planned hardening (not Tor)
+### 3.10 Egress: open by default, opt-in allowlist (not Tor)
 
-Outbound is currently unrestricted: the guest NATs through slirp, so the agent can reach
-the Anthropic API and anything else it wants — `WebFetch` URLs, `npm`/`pip`/`git clone`.
-That is fine for the *containment* goal (the agent still can't touch the host beyond the
-CWD), but it leaves one gap: a prompt-injected or compromised agent can **exfiltrate** the
-shared project tree to an arbitrary host.
+Outbound is **open by default**: the guest NATs through slirp, so the agent can reach the
+Anthropic API and anything else it wants — `WebFetch` URLs, `npm`/`pip`/`git clone`. That is
+the deliberate native-mirroring default and is fine for the *containment* goal (the agent
+still can't touch the host beyond the CWD), but it leaves one gap: a prompt-injected or
+compromised agent can **exfiltrate** the shared project tree — or, under the default
+`shareHostConfig`, the host OAuth credential it can read in-VM — to an arbitrary host.
 
-The on-threat-model answer is an **egress allowlist**, not anonymity. A default-deny rule
-that permits only `api.anthropic.com` (plus opt-in package registries the agent
-legitimately needs) closes the exfil channel at zero latency cost and stays inside ccvm's
-existing model — agent containment + credential hygiene. It would be an opt-in mode (the
-native-mirroring default keeps egress open so the agent behaves like native `claude`), and
-the natural place to enforce it is the guest's nftables/`networking.firewall` egress chain,
-or slirp-side restriction, baked through a `@TOKEN@` like the other scalars.
+The on-threat-model answer is an **egress allowlist**, not anonymity, and it is now
+**implemented as an opt-in mode** (`egressAllowlist` / `egressPorts`). An empty list (the
+default) keeps egress fully open; a non-empty list switches the guest to a **default-deny**
+nftables OUTPUT chain that permits only the listed destinations on the listed ports, plus
+loopback, conntrack replies (so the inbound ssh session keeps working), DNS, and DHCP renewal.
+`api.anthropic.com` is always auto-included so auth never breaks. This stays inside ccvm's
+existing model — agent containment + credential hygiene — at zero latency cost.
 
-A plausible option shape on `programs.ccvm.*` (mirrored into the builder), defaulting to the
-open behaviour:
+**Where the work happens.** The allowlist is a per-launch runtime input, so it follows the
+runtime-share split (§3.8), not a baked guest closure value: `egressAllowlist`/`egressPorts`
+are baked into the wrapper as scalars (`@EGRESSALLOW@`/`@EGRESSPORTS@`), but the **host**
+resolves any FQDN entries at launch (it has working DNS), passes IPs/CIDRs through verbatim,
+and writes the resolved set + ports into the **seed**. The guest's `ccvm-seed.service` reads
+the seed and applies the nftables rules before sshd. If `nft -f` fails (atomic — nothing is
+installed on error), the guest **fails closed**: it installs a bare deny-all OUTPUT chain
+rather than degrade into "no containment".
 
 ```nix
-useWhitelist        = mkDefault false;                 # opt-in; off keeps egress open
-whitelist           = [ "api.anthropic.com"            # FQDNs and/or bare IPs
-                        "192.168.1.104"
-                        "mcp.something.com" ];
-whitelistPorts      = [ 443 8443 ];                    # dst ports the allow rules cover
-whitelistRequireHttps = mkDefault false;               # if true, only 443/TLS egress allowed
+programs.ccvm.egressAllowlist = [ "github.com" "registry.npmjs.org" "10.0.0.0/8" ];
+programs.ccvm.egressPorts     = [ 443 ];   # add 80 for plain-HTTP mirrors
 ```
 
-Open questions the implementation has to settle: FQDN entries can't be matched by a stateless
-packet filter directly (the kernel sees IPs), so an allowlist by hostname needs either DNS
-pre-resolution at boot (pinned A/AAAA records, with the obvious staleness/round-robin caveats)
-or an egress proxy that filters on SNI/`Host`; `whitelistRequireHttps` is cheap as a port
-constraint but only a real guarantee if paired with the proxy. The MVP is an IP/CIDR + port
-allowlist in the firewall egress chain — the hostname conveniences layer on top of that.
+**Known limitation (the MVP).** FQDN entries can't be matched by a stateless packet filter
+directly (the kernel sees IPs), so hostnames are handled by **host-side DNS pre-resolution at
+launch** — pinned A/AAAA records, with the obvious staleness/round-robin caveat for
+CDN-fronted hosts within a long session. The stronger layer — an egress proxy that filters on
+SNI/`Host` (making FQDN rules and an HTTPS-only constraint real guarantees) — is deliberately
+**future work** that layers on top of this IP/CIDR + port MVP.
 
 **Why not Tor.** Routing guest traffic through Tor was considered and rejected. It solves
 network *anonymity*, which is orthogonal to this project: the dominant flow is the Anthropic

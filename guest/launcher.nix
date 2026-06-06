@@ -60,7 +60,7 @@ let
 
   seedSetup = pkgs.writeShellApplication {
     name = "ccvm-seed-setup";
-    runtimeInputs = [ pkgs.coreutils pkgs.util-linux ];
+    runtimeInputs = [ pkgs.coreutils pkgs.util-linux pkgs.nftables pkgs.kmod ];
     text = ''
       seed=/run/ccvm-seed
       mkdir -p "$seed"
@@ -127,6 +127,51 @@ let
           fi
         fi
       fi
+      # Opt-in egress allowlist. The host (which has working DNS) resolved the configured
+      # FQDNs into IPs and wrote them to seed/egress-allow; an absent/empty file means open
+      # egress — the native default — and we install no firewall at all. When present, apply
+      # a default-deny OUTPUT firewall permitting only those destinations on the listed ports,
+      # plus loopback, conntrack replies (so the inbound ssh session keeps working), DNS, and
+      # DHCP renewal. `nft -f` is atomic, so on a syntax/apply failure nothing is installed —
+      # we then fail CLOSED (install a bare deny-all OUTPUT chain) rather than silently leave
+      # egress wide open, since a broken allowlist must never degrade into "no containment".
+      if [ -s "$seed/egress-allow" ]; then
+        # Ensure the netfilter modules are present before nft talks to the kernel; without
+        # them even the fail-closed fallback below could not install a deny rule.
+        modprobe nf_tables nf_conntrack 2>/dev/null || true
+        portset="$(cat "$seed/egress-ports" 2>/dev/null || true)"
+        [ -n "$portset" ] || portset="443"
+        v4="" v6=""
+        while IFS= read -r addr; do
+          [ -n "$addr" ] || continue
+          case "$addr" in
+          *:*) if [ -z "$v6" ]; then v6="$addr"; else v6="$v6, $addr"; fi ;;
+          *) if [ -z "$v4" ]; then v4="$addr"; else v4="$v4, $addr"; fi ;;
+          esac
+        done <"$seed/egress-allow"
+        {
+          echo "table inet ccvm {"
+          echo "  chain output {"
+          echo "    type filter hook output priority 0; policy drop;"
+          echo "    oifname lo accept"
+          echo "    ct state established,related accept"
+          echo "    udp dport 53 accept"
+          echo "    tcp dport 53 accept"
+          echo "    udp dport 67 accept" # DHCP lease renewal
+          [ -n "$v4" ] && echo "    ip daddr { $v4 } tcp dport { $portset } accept"
+          [ -n "$v6" ] && echo "    ip6 daddr { $v6 } tcp dport { $portset } accept"
+          echo "  }"
+          echo "}"
+        } >/run/ccvm-egress.nft
+        if ! nft -f /run/ccvm-egress.nft; then
+          # Apply failed: fail CLOSED (deny all egress) rather than silently leaving it open,
+          # so a broken allowlist never degrades into "no containment".
+          echo "ccvm: ERROR: could not apply egress allowlist; failing closed (egress denied)" >&2
+          nft 'add table inet ccvm' 2>/dev/null || true
+          nft 'add chain inet ccvm output { type filter hook output priority 0 ; policy drop ; }' 2>/dev/null || true
+        fi
+      fi
+
       # An `if` (not a trailing `[ -f … ] && …`): under `set -e` a bare conditional as the
       # script's final statement makes the whole oneshot exit non-zero when the file is
       # absent — the common case — which would fail ccvm-seed.service and block sshd.
