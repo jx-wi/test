@@ -176,9 +176,21 @@ The full rationale — including the ephemeral root, the secret-handling path, a
 
 ## Verifying it yourself
 
-Most of ccvm's guarantees are checked automatically (mount isolation, the key never
-reaching disk/argv, verbatim argument forwarding, clean teardown). Terminal **fidelity**,
-however, is best confirmed by a human at a real terminal:
+ccvm's guarantees are checked at three levels:
+
+- **Host-side, in CI (`nix flake check`).** [`tests/host.sh`](tests/host.sh) drives the real
+  wrapper through a dry-run hook (it populates the seed and runs the actual config-staging
+  loop, then stops before booting) and asserts the security-critical invariants with no VM:
+  the `ANTHROPIC_API_KEY` never reaches the seed (it rides `SendEnv` over SSH only), the
+  OAuth credential is never staged into it (top-level *and* nested), escaping host-config
+  symlinks *are* dereferenced, the forwarded argv round-trips byte-for-byte, and the
+  ccvm-only flags are consumed (not forwarded) and select the mode.
+- **Full boot, locally.** [`tests/boot.sh`](tests/boot.sh) builds a ccvm with a stub `claude`
+  and boots the real VM (TCG by default, so it runs without KVM) to confirm the argv reaches
+  claude and — the load-bearing pair — that overlay mode keeps a guest edit ephemeral while
+  rw mode lands it on the host. Needs a working VM, so it's a local gate, not a CI check.
+- **Terminal fidelity, by a human.** Resize/`vim`/`less`/vi-mode behaviour is a manual smoke
+  test by nature:
 
 ```sh
 ccvm --shell        # debug shell in the guest
