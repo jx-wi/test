@@ -30,13 +30,17 @@ half-remembered context.
 - **Merged `main` is VERIFIED GREEN on the host** (2026-06-06): `nix flake check` clean (only
   the known cosmetic warnings) and `bash tests/boot.sh` **9/9** — all four uid-remap assertions
   AND both egress assertions pass in one boot, confirming the remap + firewall coexist.
-- **Branch `egress-allowlist`:** fully merged and re-verified; **safe to delete**
-  (`git branch -d egress-allowlist`).
+- **Branch `egress-allowlist`:** merged and **deleted** (2026-06-06, was `1f394b4`). Only
+  `main` remains.
 - **No git remote** is configured: every merge so far is local-only (see #5).
 - **`host.sh` = 26 assertions** (15 base + 2 uid/gid #4 + 1 egress default-open #2 + 8 git
   passthrough #7); `egress.sh` = 6. Verified host-side via the dry-run recipe (26/26 green here).
-- **`boot.sh` now has 5 new git assertions** (config present/identity/sanitized/signing-off/
-  ignore-present in the rw scenario) — **needs a Nix+KVM box to run** (still unverified here).
+- **`boot.sh` = 14 assertions** (incl. 5 new #7 git: config present/identity/sanitized/
+  signing-off/ignore-present) — **VERIFIED GREEN 14/14 on the Nix+KVM box** (2026-06-06).
+- **Commit `c0c5e97` (#7 + the shareClaudeConfig rename) is fully done to the definition of
+  done:** `host.sh` 26/26 (host-side dry-run) + `boot.sh` 14/14 (real VM) + `nix flake check`
+  green on the host (only the known cosmetic warnings: missing `meta` per #6, the
+  `homeManagerModules`/`ccvmParts` "unknown flake output" noise).
 - **#5 placeholder half resolved:** `jx-wi` is the user's real GitHub handle (confirmed
   2026-06-06) — no substitution needed; the repo will live at `github.com/jx-wi/ccvm`. The git
   REMOTE is still unconfigured (every merge is local). #7's git-config passthrough was done
