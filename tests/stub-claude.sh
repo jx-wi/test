@@ -60,6 +60,16 @@ else
   echo "SCRATCH:absent"
 fi
 
+# nixInVm: with it on, /nix/store should be a writable overlay (overlayfs) and `nix` present;
+# off (the default), /nix/store stays the read-only squashfs/9p. Report the store fs type and
+# whether nix is on PATH so boot.sh can assert per posture. stat -f is coreutils (always present).
+case "$(stat -f -c %T /nix/store 2>/dev/null)" in
+  overlayfs) echo "STORE:overlay" ;;
+  squashfs | 9p | v9fs) echo "STORE:readonly" ;;
+  *) echo "STORE:other" ;;
+esac
+command -v nix >/dev/null 2>&1 && echo "NIX:present" || echo "NIX:absent"
+
 # Egress probes (best-effort, short timeout). With open egress both reach; with the
 # example.com allowlist only the allowed host reaches and the other is blocked. boot.sh
 # asserts on these only in the egress scenario.

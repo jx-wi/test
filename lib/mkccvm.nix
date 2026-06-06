@@ -38,7 +38,7 @@ let
         nixpkgs.pkgs = pkgs;
         ccvm = {
           inherit (config) apiKeyVariable extraPackages
-            mountHostNixStore;
+            mountHostNixStore nixInVm;
           claudePackage = config.package;
         };
       }

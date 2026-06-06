@@ -111,6 +111,7 @@ Those `ccvm` flags are intercepted by the wrapper and are **not** forwarded to c
 | `cores` | `4` | VM vCPUs. |
 | `extraPackages` | `[ ]` | Extra tools inside the VM (a sensible base set is always present). |
 | `mountHostNixStore` | `false` | Share host `/nix/store` (ro) instead of a self-contained image — smaller/faster, less isolated. |
+| `nixInVm` | `false` | Enable in-VM `nix` (`nix develop`/`nix build`). On → guest gets `nix.enable` + a **writable `/nix/store` overlay** (ro store lower + tmpfs upper), so nix realises paths into RAM; set `vmDiskSize` to back the upper with disk for big closures. Build-time (rebuilds the guest), not an env var — a writable store must be set up in the initrd. See [In-VM nix](#in-vm-nix-nixinvm). |
 | `apiKeyVariable` | `"ANTHROPIC_API_KEY"` | Host env var carrying the key; passed only via SSH `SendEnv`. |
 | `shareClaudeConfig` | `true` | Mount the host `~/.claude` (ro) so the VM reuses your login, settings, commands and memory (home-manager symlinks are dereferenced); writes stay ephemeral. Per-run: `CCVM_SHARE_CLAUDE_CONFIG=0\|1`. |
 | `persistClaudeProjects` | `false` | **Opt-in.** Mount the host `~/.claude/projects` into the VM **read-write** so Claude's session transcripts and per-project memory persist back to the host — `claude --resume` then works across runs and memory survives. Off by default (those writes are otherwise ephemeral, like the rest of `~/.claude`). Scoped to `projects/` only, so the OAuth credential is still never written back. See [Resuming sessions & persisting memory](#resuming-sessions--persisting-memory). Per-run: `CCVM_PERSIST_PROJECTS=0\|1`. |
@@ -199,9 +200,28 @@ The image lives in a **disk-backed** dir (`${XDG_CACHE_HOME:-~/.cache}/ccvm`; ov
 ccvm refuses a tmpfs target unless you set `CCVM_SCRATCH_ALLOW_TMPFS=1`. Per run:
 `CCVM_VM_DISK_SIZE=<GiB>` (or `=0` to disable). Complements `mountHostNixStore`: if a big closure is
 already realised in the **host** store, share it read-only at zero RAM cost instead; the disk pool
-is for when the guest must **write** large data ephemerally. (Today the pool backs `/scratch`; a
-forthcoming increment also makes `/nix/store` writable on it for in-VM `nix develop`/`nix build` —
-see [design §3.11](docs/design.md).)
+is for when the guest must **write** large data ephemerally. With `nixInVm` on, the pool also backs
+the writable `/nix/store` upper (see below).
+
+### In-VM nix (`nixInVm`)
+
+`nix develop` is the gateway to per-project, declarative, reproducible toolchains (npm, pip, cargo,
+…). By default ccvm's `/nix/store` is **read-only** (the lean, fast, RAM-only posture), so in-VM
+`nix build`/`nix develop` don't work — you get the baked toolchain plus whatever you add via
+`extraPackages`. Turn on `nixInVm` to make nix work inside the guest. There are three postures:
+
+| Posture | Setting | `/nix/store` | Host surface |
+|---|---|---|---|
+| **Minimal** *(default)* | `nixInVm = false` | read-only image | none; smallest closure, fastest boot |
+| **In-VM nix** | `nixInVm = true` | **writable overlay** (ro image lower + writable upper) | none — the guest builds its own paths |
+| **+ host store** | `nixInVm = true; mountHostNixStore = true;` | writable overlay over the **host** store (ro) | the host store is readable by the VM |
+
+With `nixInVm`, the overlay's writable upper is **tmpfs (RAM)** by default — a big `nix develop`
+will exhaust guest RAM, so set **`vmDiskSize`** to relocate the upper onto the encrypted ephemeral
+disk. Everything stays wipe-on-exit: paths nix realises live only in the upper (RAM or the encrypted
+disk) and are gone when the VM stops. `nixInVm` is a **build-time** option (it rebuilds the guest
+with `nix.enable` and reconfigures the store mount in the initrd), so enable it via home-manager
+(`programs.ccvm.nixInVm = true`) or a flake override — not a `CCVM_*` env var.
 
 ### Git config in the VM (`shareGitConfig` / `CCVM_SHARE_GIT_CONFIG`)
 

@@ -25,6 +25,7 @@ echo "building stub-claude ccvm wrappers (builds the guest closure; first run is
 WRAP="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix open)/bin/ccvm"
 WRAP_EGRESS="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix egress)/bin/ccvm"
 WRAP_SCRATCH="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix scratch)/bin/ccvm"
+WRAP_NIX="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix nix)/bin/ccvm"
 
 # Deterministic git-config fixture so the shareGitConfig assertions don't depend on the
 # runner's real ~/.gitconfig. Point HOME here for the wrapper runs (set AFTER `nix build`, so
@@ -126,6 +127,12 @@ grep -qa '^CLAUDEMD:blurb$' <<<"$OUT" &&
   ok "claude-md: the ccvm-context blurb survived into the guest" || no "claude-md: blurb missing"
 grep -qa '^CLAUDEMD:mode-rw$' <<<"$OUT" &&
   ok "claude-md: rw-mode 'edits are live' note present in the guest" || no "claude-md: rw mode note missing"
+# Default (nixInVm off): the store stays read-only and nix is absent — the lean default posture.
+grep -qa '^STORE:readonly$' <<<"$OUT" &&
+  ok "default: /nix/store is read-only (no in-VM nix)" ||
+  no "default: /nix/store not read-only: $(grep -a '^STORE:' <<<"$OUT")"
+grep -qa '^NIX:absent$' <<<"$OUT" &&
+  ok "default: nix is absent from the guest (lean closure)" || no "default: nix unexpectedly present"
 rm -rf "$PROJ_RW"
 
 # ---- overlay (--no-auto-update-files): the write stays in the VM -----------
@@ -172,6 +179,20 @@ grep -qa '^SCRATCH:encrypted$' <<<"$OUT" &&
   ok "vmDiskSize: disk image removed on exit" ||
   no "vmDiskSize: disk image left behind after exit"
 rm -rf "$PROJ_SC" "$SCRATCH_TMP"
+
+# ---- nixInVm: /nix/store is a writable overlay + nix is present -------------
+# The guest is built with nix.enable and a writable /nix/store overlay (ro store lower + tmpfs
+# upper, set up in the initrd). We can't do a full `nix build` here without leaning on the
+# network/cache, so assert the structural guarantees: the store is an overlayfs (not the ro
+# squashfs) and `nix` is on PATH. A real `nix develop` is the human sanity pass.
+PROJ_NIX="$(mktemp -d)"
+OUT="$(run_capture "$WRAP_NIX" "$PROJ_NIX")"
+grep -qa '^STORE:overlay$' <<<"$OUT" &&
+  ok "nixInVm: /nix/store is a writable overlay (ro lower + tmpfs upper)" ||
+  no "nixInVm: /nix/store not an overlay: $(grep -a '^STORE:' <<<"$OUT")"
+grep -qa '^NIX:present$' <<<"$OUT" &&
+  ok "nixInVm: nix is available in the guest" || no "nixInVm: nix not on PATH"
+rm -rf "$PROJ_NIX"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

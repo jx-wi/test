@@ -68,6 +68,14 @@ These are the whole point of the project. Treat any change that weakens one as a
   with your aliases/ignores) make ccvm behave like native `claude`. Isolation (read-only
   project, no config) is the **opt-in**. Do not re-propose "secure by default" — that was the
   original spec and was deliberately reversed.
+- **RAM-only is the default; the disk pool and in-VM nix are opt-in.** `vmDiskSize=0` (no disk,
+  pure RAM) and `nixInVm=false` (read-only `/nix/store`, no in-VM nix, lean closure) are the
+  defaults — keep boot fast and the no-disk stance unless asked. `nixInVm` is **build-time** (it
+  flips `nix.enable` and rebuilds the store as a writable overlay in the initrd) — never try to
+  make it a runtime `CCVM_*` env var. Its overlay upper is tmpfs (ephemeral, wiped on exit); a
+  large `nix develop` is expected to need `vmDiskSize` to relocate that upper to disk (still TODO).
+  Three postures: minimal (`nixInVm=false`) · in-VM nix (`nixInVm=true`, guest-only) · + host store
+  (`+ mountHostNixStore`, exposes the host store ro). Don't collapse these or default any of them on.
 - **`extraClaudeMd` is default-on context, not a flag.** A built-in blurb is staged as the
   guest's `~/.claude/CLAUDE.md` (via the seed, **appended** to any host-shared one — never
   clobbering it) so the agent knows it's in ccvm. It must stay seed-delivered, never become

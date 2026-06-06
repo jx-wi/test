@@ -12,7 +12,7 @@ let
   defaults = import ../lib/defaults.nix { inherit pkgs; };
   ccvmPkg = (mkCcvm {
     inherit (cfg)
-      package autoUpdateFiles memory cores extraPackages mountHostNixStore
+      package autoUpdateFiles memory cores extraPackages mountHostNixStore nixInVm
       apiKeyVariable shareClaudeConfig persistClaudeProjects shareGitConfig extraClaudeMd
       lockGuestMemory vmDiskSize egressAllowlist egressPorts extraGuestModules;
   }).wrapper;
@@ -66,6 +66,21 @@ in
       type = lib.types.bool;
       default = defaults.mountHostNixStore;
       description = "Share the host /nix/store read-only instead of building a self-contained image (smaller/faster, less isolated).";
+    };
+
+    nixInVm = lib.mkOption {
+      type = lib.types.bool;
+      default = defaults.nixInVm;
+      description = ''
+        Enable a usable `nix` inside the VM (in-VM `nix develop`/`nix build`). Off by default —
+        the default guest is RAM-only with a read-only /nix/store. When on, the guest is built with
+        `nix.enable` and a WRITABLE /nix/store overlay (the read-only store image as the lower, a
+        writable upper); nix realises new paths into the upper. Build-time (rebuilds the guest), not
+        a runtime env var, because a writable store must be set up in the initrd. The upper is
+        tmpfs (RAM) by default — a large `nix develop` will exhaust guest RAM until you also set
+        `vmDiskSize`, which relocates the upper onto the encrypted ephemeral disk. Everything stays
+        wipe-on-exit. For acceleration by reusing host-built paths, see `mountHostNixStore`.
+      '';
     };
 
     apiKeyVariable = lib.mkOption {

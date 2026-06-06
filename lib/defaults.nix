@@ -12,6 +12,7 @@
   cores = 4; # guest vCPUs
   extraPackages = [ ]; # extra toolchains available inside the VM (a base set is always present)
   mountHostNixStore = false; # share host /nix/store ro instead of a self-contained image
+  nixInVm = false; # build-time: enable in-VM nix (writable /nix/store overlay + nix.enable)
   apiKeyVariable = "ANTHROPIC_API_KEY"; # host env var carrying the key (rides SendEnv only)
   shareClaudeConfig = true; # reuse the host ~/.claude (login/settings/memory), read-only
   persistClaudeProjects = false; # persist ~/.claude/projects back to the host (resume + memory)

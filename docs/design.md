@@ -346,19 +346,19 @@ who wants anonymity runs Tor or a VPN on the host and the guest rides through it
 with no guest-side code. Egress *control* (where the agent may connect) belongs in ccvm;
 egress *anonymization* (how those packets reach the wire) belongs on the host.
 
-### 3.11 Encrypted ephemeral scratch disk (`storeDisk`) — phase 1 implemented
+### 3.11 Encrypted disk pool (`vmDiskSize`) + in-VM nix (`nixInVm`)
 
-> **Status: phase 1 implemented (generic encrypted `/scratch`); phase 2 (writable `/nix/store`
-> + in-VM `nix`) still planned.** The rationale and the full phased plan are below. Phase 1 is
-> wired end-to-end — option/token surface, wrapper image staging, the guest LUKS-format/open/
-> mount in the seed service, and host-side + boot tests — and **verified on a Nix+KVM box**
-> (2026-06-06): `nix flake check` clean, `tests/boot.sh` 21/21 incl. the `scratch` posture, and a
-> real `storeDisk="2G"` run showed `/scratch` as a writable dm-crypt mount (`lsblk`: `vdb →
-> ccvm-scratch (crypt)`) with the host image removed on exit. Two refinements landed during
-> implementation that the
-> plan below predates: the LUKS format uses a fast **pbkdf2** (the key is already 64 random
-> bytes, so a memory-hard KDF would only slow boot under TCG for no security gain), and a tmpfs
-> scratch dir is **refused** unless `CCVM_SCRATCH_ALLOW_TMPFS=1`.
+> **Status: both shipped & KVM-verified (2026-06-06).** Two opt-in, off-by-default features came out
+> of this design: **`vmDiskSize`** — an encrypted, ephemeral disk pool (key generated in guest RAM,
+> host sees only ciphertext, wiped on exit) mounted at `/scratch`; and **`nixInVm`** — a writable
+> `/nix/store` overlay + `nix.enable` so in-VM `nix develop`/`nix build` work. Verified end to end:
+> `nix flake check` clean, `tests/boot.sh` 25/25, a real `vmDiskSize` run showed `/scratch` as a
+> dm-crypt mount, and a real in-VM `nix build nixpkgs#hello` worked with the realised path **gone on
+> the host after exit**. Two refinements landed during implementation that the plan below predates:
+> the LUKS format uses a fast **pbkdf2** (the key is already 64 random bytes, so a memory-hard KDF
+> would only slow boot for no security gain), and a tmpfs image dir is **refused** unless
+> `CCVM_SCRATCH_ALLOW_TMPFS=1`. The one piece still open is wiring the two together — backing the
+> `nixInVm` overlay *upper* with the `vmDiskSize` disk (today it's tmpfs) — see "Remaining" below.
 
 **The problem the RAM-only model can't solve.** ccvm's root is tmpfs and `/nix/store` is a
 read-only squashfs (§3.4). That is the right default — wipe-on-exit is a property of *physics*,
@@ -431,32 +431,36 @@ the tmpfs guard, sparse `truncate`, `virtio-blk` with `serial=ccvm-scratch` (sta
 `/dev/disk/by-id` path regardless of `/dev` ordering), the seed marker, `cleanup()` `rm`, and the
 guest seed-service LUKS-format/open/mkfs/mount with fail-open. `/home` and root stay tmpfs.
 
-**Increment B — writable `/nix/store` overlay + in-VM `nix` — REMAINING (the hard part).** Use the
-decrypted pool as the **overlay upper** over the read-only squashfs `/nix/store` and flip
-`nix.enable = true`, so `nix develop`/`nix build` realise into disk-backed (not RAM) store. The
-catch that makes this materially harder than A: `/nix/store` is mounted in the **initrd**
-(`fileSystems."/nix/store"`, `neededForBoot`), and the running system's binaries are open from it —
-so the LUKS-open + overlay must happen **in the initrd**, before the system pivots, not in the
-post-boot seed service. That means:
-- `cryptsetup` (+ `e2fsprogs`, dm-crypt modules) in the **initrd** closure, and a
-  `boot.initrd.systemd` service that finds the disk by serial, generates the key in initrd RAM,
-  `luksFormat`s + opens it, `mkfs.ext4`, then mounts `lowerdir=<ro squashfs>` +
-  `upperdir=<pool>/store-upper` as an overlay at `/nix/store` before `sysroot`/store is needed.
-- **Fail-open is critical and harder here:** if any step fails, the initrd MUST fall back to
-  today's plain read-only squashfs `/nix/store` so the VM still boots (a bricked boot is the worst
-  outcome). This is the main risk and why B is built and **boot-tested in a tight loop on Nix+KVM**
-  separately from A.
-- `nix.enable = true` only when the pool is on (the guest learns this from the seed marker; a guest
-  rebuild isn't needed — the marker gates the initrd service, and `nix.enable` can be unconditional
-  since an unused nix daemon is cheap, or gated by a baked flag if we want the leaner default).
-- The same pool also keeps backing `/scratch` (and optionally `/tmp`) post-boot, so one disk serves
-  both. Build caches are pointed at `/scratch` by documentation (`TMPDIR`, `CARGO_TARGET_DIR`, …).
+**Increment B — writable `/nix/store` overlay + in-VM `nix` — DONE & KVM-VERIFIED (2026-06-06).**
+The `nixInVm` option (build-time, default off — it rebuilds the guest with `nix.enable` and changes
+the store mount, so it can't be a runtime env var) makes `/nix/store` a **writable overlay**: the
+read-only store image as the lower (`/nix/.ro-store`), a writable upper, declarative
+`fileSystems.overlay` at `/nix/store`. This turned out far simpler than feared: the declarative
+overlay is set up by the systemd initrd with **no custom initrd scripting** — and the upper is
+**tmpfs**, so there is no LUKS-in-initrd at all for the RAM-backed case. nix realises new paths into
+the upper. Verified: `nix flake check` clean, `tests/boot.sh` 25/25 (default posture stays
+read-only + no nix; the `nix` posture is an `overlayfs` `/nix/store` with `nix` present), and a real
+guest shell ran `nix build`/`nix run nixpkgs#hello` → "Hello, world!" with the realised path **gone
+on the host after exit** (it lived only in the tmpfs upper — ephemeral guarantee intact). MVP scope:
+no store-DB registration (nix builds/substitutes fresh into the upper rather than reusing baked
+paths — a later optimization), tmpfs upper only.
 
-**Tests stay as established:** `host.sh` for the host-side staging (marker, sparse image, no key in
-seed, size validation) in `nix flake check`; the `boot.nix` `scratch` posture + `stub-claude.sh`
-`SCRATCH:*` reports for the live encrypted mount; and, for B, an added `STORE:writable` assertion
-(the stub writes a path into `/nix/store` and confirms it sticks) plus a real in-VM `nix build`
-smoke check.
+**Remaining follow-ons (not blocking — `nix develop` works today):**
+- **Disk-backed upper.** Today the overlay upper is tmpfs, so a large `nix develop` exhausts guest
+  RAM. Relocating the upper onto the `vmDiskSize` encrypted disk *is* the LUKS-in-initrd work
+  originally feared here (the disk must be opened + the upper mounted in the initrd, before the
+  store is needed) — with fail-open to the tmpfs upper. This is the genuinely hard increment.
+- **L2 — `mountHostNixStore` as the overlay lower + acceleration.** Use the host store (ro 9p) as
+  the lower for path *availability*, plus a separate **substituter** option (host as a binary cache)
+  for the actual speed-up — because the FS mount alone gives paths but not the host nix **DB**
+  registration, so nix won't trust them as substitutes without more work (objection raised during
+  design). Two separate options, both opt-in.
+- **Store-DB registration** (`closureInfo`/`.reginfo` load at boot) so nix reuses the baked paths
+  instead of re-fetching — a boot-time optimization, deferred.
+
+**Tests as established:** `host.sh` host-side staging in `nix flake check`; `boot.nix` postures
+(`scratch` for the disk, `nix` for in-VM nix) + `stub-claude.sh` reports (`SCRATCH:*`,
+`STORE:overlay`/`readonly`, `NIX:present`/`absent`) asserted by `tests/boot.sh`.
 
 **Tests.**
 - *`host.sh` (dry-run, new block):* opt-in writes `seed/scratch-disk`; the sparse image exists at

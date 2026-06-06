@@ -43,9 +43,10 @@ half-remembered context.
   extraClaudeMd #8 + 3 persist #12 + 3 help/version #6 + **7 vmDiskSize #10**); `egress.sh` = 6.
   **46/46 green here** via the dry-run recipe (the recipe below was updated for the
   `@CLAUDEMD@`/`@PERSISTPROJECTS@`/`@VERSION@`/`@VMDISKSIZE@` tokens).
-- **`boot.sh` = 17 assertions** — **17/17 VERIFIED on the Nix+KVM box** (2026-06-06), including
-  the 5 #7 git + 3 #8 CLAUDEMD assertions, with `nix flake check` clean. #12 adds **no** boot
-  assertion yet (needs a persist-enabled `boot.nix` variant + a host-write check — see #12).
+- **`boot.sh` = 25 assertions** — **25/25 VERIFIED on the Nix+KVM box** (2026-06-06): the base +
+  5 #7 git + 3 #8 CLAUDEMD + 4 #10 `vmDiskSize`/scratch + 2 default-lean (ro store/no nix) + 2 #10
+  `nixInVm` (overlay + nix present), with `nix flake check` clean. #12 still adds **no** boot
+  assertion (needs a persist-enabled `boot.nix` variant + a host-write check — see #12).
 - **Baked `@TOKENS@` now number 21** (added `@CLAUDEMD@` #8, `@PERSISTPROJECTS@` #12,
   `@VERSION@` #6, `@VMDISKSIZE@` #10). The token list and value list in BOTH `lib/mkccvm.nix` and
   `tests/default.nix` must stay balanced at 21 — verify with the awk one-liners (a mismatch
@@ -376,7 +377,7 @@ guest shell line-editing (backspace, etc.) works correctly with the terminfo fix
 
 ---
 
-## 10. 🟡 Encrypted ephemeral disk pool (`vmDiskSize`) — increment A done; B (writable store) TODO
+## 10. 🟡 Disk pool (`vmDiskSize`) + in-VM nix (`nixInVm`) — A & B done; disk-backed upper + L2 TODO
 
 **Decision (locked 2026-06-06, see design §3.11):** ONE ephemeral encrypted pool, not two disks.
 `vmDiskSize` (integer GiB, `0`=off, default off) supersedes the phase-1 `storeDisk` string (pre-
@@ -408,20 +409,36 @@ modules + `cryptsetup`/`e2fsprogs`; fail-open seed block finds the disk by seria
 already high-entropy → no memory-hard KDF, keeps TCG boot quick), open, `mkfs.ext4`, mount `/scratch`.
 Tests: `host.sh` §12, `boot.nix` `scratch` posture, `stub` `SCRATCH:mounted|writable|encrypted`.
 
-**Increment B — writable `/nix/store` overlay + `nix.enable` — REMAINING (the hard part).** Reuse
-the same pool as the overlay **upper** over the ro squashfs `/nix/store` so `nix develop`/`nix build`
-realise to disk, not RAM. The catch: `/nix/store` is **initrd-mounted** (`neededForBoot`) and the
-running binaries are open from it, so the LUKS-open + overlay must be done **in the initrd** before
-pivot — `cryptsetup`/`e2fsprogs`/dm-crypt in the **initrd** closure + a `boot.initrd.systemd`
-service. **Fail-open is the crux:** any failure must fall back to today's ro squashfs store so the
-VM still boots (a bricked boot is the worst outcome) — this is why B is built and boot-tested in a
-tight loop on Nix+KVM, separately from A. Plus `nix.enable = true` (gated by the `vm-disk` marker /
-a baked flag), the pool still backing `/scratch` post-boot, and a `boot.sh` `STORE:writable`
-assertion (+ a real in-VM `nix build` smoke check). Full writeup: design §3.11.
+**Increment B — writable `/nix/store` overlay + `nix.enable` (`nixInVm`) — DONE & KVM-VERIFIED
+(2026-06-06).** Build-time option `nixInVm` (default off; rebuilds the guest — can't be a runtime
+env var since it flips `nix.enable` + the store mount). When on, `/nix/store` is a **declarative
+`fileSystems.overlay`** (ro store image lower at `/nix/.ro-store` + **tmpfs** upper at
+`/nix/.rw-store`) — far simpler than the feared initrd-LUKS path: the systemd initrd sets the
+overlay up with **no custom scripting**, and the tmpfs upper means no LUKS-in-initrd at all for the
+RAM case. Files: `lib/defaults.nix` (`nixInVm=false`), `lib/mkccvm.nix` (passed to the guest eval —
+**no `@TOKEN@`**, build-time), `modules/home-manager.nix` (option+inherit), `guest/default.nix`
+(merged `fileSystems` = `rootFs // storeFs`; `nix.enable = cfg.nixInVm` + flakes/trusted-users).
+Tests: `boot.nix` `nix` posture, `stub` reports `STORE:overlay`/`readonly` + `NIX:present`/`absent`,
+`boot.sh` asserts default=ro/no-nix and nix-posture=overlay+nix. **Verified:** `nix flake check`
+clean, `bash tests/boot.sh` **25/25**, and a real `--shell` ran `nix build`/`nix run nixpkgs#hello`
+→ "Hello, world!" with `/nix/store`=overlayfs and the realised path **gone on the host after exit**.
+MVP scope: tmpfs upper only, no store-DB registration (nix builds fresh into the upper).
 
-**Verified (increment A):** `host.sh` **46/46** here via dry-run (sparse 1 GiB image: 0 KiB
-allocated), AND on the Nix+KVM box (2026-06-06): `nix flake check` clean, `bash tests/boot.sh`
-21/21, real `CCVM_VM_DISK_SIZE=4` run showed `/scratch` as a 4 G dm-crypt mount. **Committed.**
+**Verified (increment A):** `host.sh` **46/46** here via dry-run, AND on the Nix+KVM box
+(2026-06-06): `nix flake check` clean, `bash tests/boot.sh` (now 25/25), real `CCVM_VM_DISK_SIZE=4`
+run showed `/scratch` as a 4 G dm-crypt mount. **Both A & B committed.**
+
+**Remaining (not blocking — `nix develop` works today):**
+- **Disk-backed overlay upper** — relocate the `nixInVm` upper from tmpfs onto the `vmDiskSize`
+  encrypted disk so big closures don't OOM RAM. THIS is the genuinely hard initrd-LUKS work (open
+  the disk + mount the upper in the initrd, fail-open to tmpfs). The two features exist but aren't
+  wired together yet.
+- **L2: `mountHostNixStore` as the overlay lower + a separate substituter option** — paths via the
+  FS mount, real accel via host-as-binary-cache (the FS mount alone lacks the host nix DB).
+- **Store-DB registration** (`closureInfo`/`.reginfo` load at boot) so nix reuses baked paths — a
+  boot-time optimization.
+- **Watch:** the bigger nix-enabled guest occasionally tripped the boot timeout once (worked on
+  retry); if it recurs, bump `wait_for_boot`'s cap for the nix posture / document `CCVM_BOOT_TRIES`.
 
 ---
 
@@ -491,9 +508,11 @@ project's slug instead of all of `projects/` if exposing all history to in-VM wr
 
 - **No git remote yet** (#5): every commit is local-only; `main` is the only branch (the
   `egress-allowlist` branch was merged and deleted). The user adds the remote on the host.
-- **#5, #6, #7 done; #10 increment A (the `vmDiskSize` `/scratch` pool) DONE & KVM-VERIFIED
-  (2026-06-06).** Open work left: **#10 increment B** (writable `/nix/store` overlay + in-VM `nix`,
-  initrd-based) and the optional #12 persist boot assertion. The pre-public list is otherwise clear.
+- **#5, #6, #7 done; #10 increments A (`vmDiskSize` `/scratch`) AND B (`nixInVm` writable store +
+  in-VM nix) DONE & KVM-VERIFIED (2026-06-06).** Open work left under #10: wiring them together
+  (disk-backed overlay upper — the hard initrd-LUKS bit), L2 (`mountHostNixStore` lower +
+  substituter), and store-DB registration. Plus the optional #12 persist boot assertion. The
+  pre-public list is otherwise clear.
 - **Commit trailer:** `Co-authored-by: Claude <noreply@anthropic.com>` (exact form; see CLAUDE.md).
 - **Recently done, not a blocker:** `CCVM_MEMORY=<MiB>` per-run guest-RAM override (wrapper + docs
   + `host.sh` tests). The `memory` home-manager option already existed (default 4096); the new bit

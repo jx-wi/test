@@ -43,6 +43,15 @@ in
       default = false;
       description = "Share the host /nix/store read-only instead of a self-contained image.";
     };
+    nixInVm = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Enable in-VM nix: a writable /nix/store overlay (read-only store image as the lower, a
+        tmpfs upper) plus nix.enable, so `nix develop`/`nix build` work inside the guest. The
+        upper is RAM (tmpfs); a host vmDiskSize disk can back it instead (later increment).
+      '';
+    };
   };
 
   config = {
@@ -87,27 +96,57 @@ in
       (if pkgs.stdenv.hostPlatform.isAarch64 then "console=ttyAMA0" else "console=ttyS0")
     ];
 
-    # Root in RAM; discarded on power-off. No size cap => defaults to 50% of VM RAM.
-    fileSystems."/" = {
-      device = "tmpfs";
-      fsType = "tmpfs";
-      options = [ "mode=0755" ];
-      neededForBoot = true;
-    };
-    # The whole system closure, read-only. Either a self-contained squashfs on the first
-    # virtio-blk disk (default, max isolation) or the host store shared over 9p.
-    fileSystems."/nix/store" =
-      if cfg.mountHostNixStore then {
-        device = "ccvm-nixstore";
-        fsType = "9p";
-        options = [ "trans=virtio" "version=9p2000.L" "msize=1048576" "access=any" "ro" "cache=loose" ];
-        neededForBoot = true;
-      } else {
-        device = "/dev/vda";
-        fsType = "squashfs";
-        options = [ "ro" ];
-        neededForBoot = true;
-      };
+    # Filesystems: tmpfs root (RAM, discarded on power-off) + the read-only system closure. The
+    # closure is a self-contained squashfs on the first virtio-blk disk (default, max isolation)
+    # or the host store over 9p. With nixInVm it becomes the overlay LOWER (at /nix/.ro-store)
+    # under a writable /nix/store; without it (the lean default) it is /nix/store directly, ro.
+    fileSystems =
+      let
+        roStore =
+          if cfg.mountHostNixStore then {
+            device = "ccvm-nixstore";
+            fsType = "9p";
+            options = [ "trans=virtio" "version=9p2000.L" "msize=1048576" "access=any" "ro" "cache=loose" ];
+            neededForBoot = true;
+          } else {
+            device = "/dev/vda";
+            fsType = "squashfs";
+            options = [ "ro" ];
+            neededForBoot = true;
+          };
+        # No size cap on root => defaults to 50% of VM RAM.
+        rootFs."/" = {
+          device = "tmpfs";
+          fsType = "tmpfs";
+          options = [ "mode=0755" ];
+          neededForBoot = true;
+        };
+        storeFs =
+          if cfg.nixInVm then {
+            # Writable store: ro lower + tmpfs upper, overlaid at /nix/store. The overlay is set up
+            # in the initrd (store is neededForBoot); nix realises new paths into the tmpfs upper, so
+            # they cost RAM (a host vmDiskSize disk can back the upper in a later increment). Wiped on
+            # exit like everything else. Off by default — this branch only exists when nixInVm is on.
+            "/nix/.ro-store" = roStore;
+            "/nix/.rw-store" = {
+              device = "tmpfs";
+              fsType = "tmpfs";
+              options = [ "mode=0755" ];
+              neededForBoot = true;
+            };
+            "/nix/store" = {
+              overlay = {
+                lowerdir = [ "/nix/.ro-store" ];
+                upperdir = "/nix/.rw-store/store";
+                workdir = "/nix/.rw-store/work";
+              };
+              neededForBoot = true;
+            };
+          } else {
+            "/nix/store" = roStore;
+          };
+      in
+      rootFs // storeFs;
     boot.tmp.useTmpfs = true;
 
     ##########################################################################
@@ -221,7 +260,12 @@ in
     documentation.man.enable = false;
     documentation.nixos.enable = false;
     services.udisks2.enable = false;
-    # No mutable nix in the guest (store is read-only); skip the channel machinery.
-    nix.enable = false;
+    # Mutable nix only when nixInVm is on (writable /nix/store overlay above). Off by default —
+    # the store is read-only, so the channel/daemon machinery is skipped and the closure stays lean.
+    nix.enable = cfg.nixInVm;
+    nix.settings = lib.mkIf cfg.nixInVm {
+      experimental-features = [ "nix-command" "flakes" ]; # `nix develop`/`nix build` on flakes
+      trusted-users = [ "root" "ccvm" ]; # let the agent add substituters / build without sudo
+    };
   };
 }
