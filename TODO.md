@@ -26,9 +26,12 @@ half-remembered context.
 
 - **Branch `main` only** (no git remote yet — every commit is local; the user adds the remote
   on the host when ready, see #5). Done & committed:
-  **#1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12.** Recent commits (newest first):
-  - `decad40` #11/#12 persistClaudeProjects (resume + memory persist; **committed** — was the
-    last uncommitted item)
+  **#1, #2, #3, #4, #5, #6, #7, #8, #9, #10(A+B), #11, #12.** Recent commits (newest first):
+  - `961f967` #10-B nixInVm (writable /nix/store overlay + in-VM nix; KVM-verified `nix build` works)
+  - `d1bedcf` #10 storeDisk→vmDiskSize rename (single ephemeral disk pool, int GiB)
+  - `b6efaee` #10-A storeDisk (encrypted ephemeral /scratch; renamed by d1bedcf)
+  - `8f95cee` #10 FDE implementation plan in design §3.11
+  - `decad40` #11/#12 persistClaudeProjects (resume + memory persist)
   - `c833b47` #8 extraClaudeMd (ccvm-context staged as the guest's `~/.claude/CLAUDE.md`)
   - `9c15793` #9 boot spinner + guest terminfo fix (terminal fidelity under `--shell`)
   - `db0405f` #10 FDE scratch-disk **design** captured (design.md §3.11; design-only)
@@ -56,6 +59,69 @@ half-remembered context.
 - **RENAME (done, `c0c5e97`):** `shareHostConfig` → `shareClaudeConfig` everywhere (option, env
   `CCVM_SHARE_CLAUDE_CONFIG`, token `@SHARECLAUDE@`, seed marker `share-claude-config`). That is
   why #3 below reads as "dead `shareClaudeConfig` guest option" — it was `shareHostConfig` then.
+
+## ⏭ NEXT TASK — back the `nixInVm` overlay upper with the `vmDiskSize` disk (the hard initrd-LUKS bit)
+
+**Goal.** Today `nixInVm`'s writable `/nix/store` overlay upper (`/nix/.rw-store`) is **tmpfs (RAM)**,
+so a big `nix develop` OOMs the guest. Make it use the **`vmDiskSize` encrypted disk** when BOTH
+are on, with **fail-open to tmpfs**. `nix develop` already works today (B1) — this is the increment
+that makes it work for *real* multi-GB toolchains without a giant `memory=`. It is the genuinely
+hard part: it needs LUKS-open + mount **in the initrd** (B1 dodged this by using a tmpfs upper).
+
+**Why initrd, not the post-boot seed service that does `/scratch`.** The `/nix/store` overlay is
+`neededForBoot` → the **systemd initrd** sets it up before pivot, so its upper (`/nix/.rw-store`)
+must be mounted in the initrd too. `guest/launcher.nix`'s post-boot `ccvm-seed-setup` (which LUKS-es
+the disk for `/scratch` today) runs far too late. So when `nixInVm` is on, the disk's LUKS-open must
+move into the initrd.
+
+**Read these first (current state):**
+- `guest/default.nix`: `/nix/store` is a declarative `fileSystems.overlay` (lower `/nix/.ro-store`
+  = squashfs or 9p; upper `/nix/.rw-store` = **tmpfs**), built as `rootFs // storeFs`, gated on
+  `cfg.nixInVm`. `nix.enable = cfg.nixInVm`. `dm_mod`/`dm_crypt` + `cryptsetup` are in the **running
+  system only**, NOT the initrd.
+- `guest/launcher.nix` `ccvm-seed-setup` (POST-boot): on `seed/vm-disk` → find
+  `/dev/disk/by-id/virtio-ccvm-scratch`, gen 64-byte key in `/run` (guest RAM), `cryptsetup
+  luksFormat --type luks2 --pbkdf pbkdf2 --pbkdf-force-iterations 1000`, open `ccvm-scratch`,
+  `mkfs.ext4`, mount `/scratch`. Fail-open throughout.
+- `wrapper/ccvm.sh`: attaches the disk (`virtio-blk serial=ccvm-scratch`) + writes `seed/vm-disk`
+  when `VMDISKSIZE>0`; sparse image in a disk-backed dir, removed on exit. **No wrapper change needed.**
+
+**Plan:**
+1. **Initrd closure (gate all on `cfg.nixInVm` so the default initrd stays lean):** add
+   `dm_mod`/`dm_crypt` to `boot.initrd.availableKernelModules`+`kernelModules`; put `cryptsetup` +
+   `e2fsprogs` (`mkfs.ext4`) in the initrd (`boot.initrd.systemd.initrdBin`/`storePaths`).
+2. **Initrd service** `boot.initrd.systemd.services.ccvm-store-disk`, ordered **Before** the
+   `/nix/.rw-store` mount + the `/nix/store` overlay: probe `/dev/disk/by-id/virtio-ccvm-scratch`
+   (udev settle); if present → key in initrd `/run`, `luksFormat` (pbkdf2, fresh), open, `mkfs.ext4`,
+   mount at `/nix/.rw-store`. Absent or ANY failure → leave the declared tmpfs `/nix/.rw-store`
+   (FAIL-OPEN; never brick boot — the overlay still works, just in RAM).
+3. **Clean trick:** the overlay config (`upperdir=/nix/.rw-store/store`, `workdir=…/work`) does NOT
+   change — only *what's mounted at `/nix/.rw-store`* does. **KEY DESIGN QUESTION to solve:**
+   systemd-initrd ordering — the service's disk mount must win over the declared tmpfs mount unit
+   (`Before=`/`Conflicts=` the generated `nix-.rw\x2dstore.mount`, or make the tmpfs conditional).
+   This is the fiddly bit; budget time for it.
+4. **Don't open the disk twice / share it as a pool.** When `nixInVm`+disk, the **initrd** owns the
+   disk; the post-boot `ccvm-seed-setup` must DETECT `/dev/mapper/ccvm-scratch` already open and
+   bind a subdir for `/scratch` instead of re-formatting. Layout: one ext4 with subdirs `store/` +
+   `work/` (overlay) and `scratch/`; overlay upper=`/nix/.rw-store/store`, `/scratch` binds
+   `/nix/.rw-store/scratch`. When `nixInVm` is OFF, keep today's post-boot path unchanged.
+5. **Tests:** new `boot.nix` posture `nixDisk = mk { nixInVm = true; vmDiskSize = 1; }`; `stub`
+   asserts `/nix/.rw-store` is a **dm-crypt ext4** (not tmpfs) and `/scratch` still works; `boot.sh`
+   asserts. Fail-open is hard to unit-test — verify by reasoning + a manual run.
+
+**Gotchas:** initrd can't read the 9p seed → detect the disk by **serial/device presence**, not
+`seed/vm-disk` (`nixInVm` is baked, so the initrd knows nix is on; disk presence is the runtime
+probe). Key in initrd `/run` (tmpfs), never on 9p (same invariant as B1). pbkdf2 keeps `luksFormat`
+fast. The nix guest already nearly tripped the boot timeout once — initrd LUKS adds boot time, so
+watch `wait_for_boot` / `CCVM_BOOT_TRIES`.
+
+**DoD:** `nix flake check` + `tests/boot.sh` (new `nixDisk` posture) green on Nix+KVM, plus a real
+`nixInVm=true`+`vmDiskSize=N` run where a multi-GB `nix develop` succeeds without OOM and
+`/nix/.rw-store` shows as a crypt device. Then commit (auto-commit-on-green).
+
+**After this:** the two smaller #10 follow-ons (L2 = `mountHostNixStore` overlay-lower + a separate
+substituter option; store-DB `.reginfo` registration) — see #10 "Remaining" + design §3.11. Both
+optional. The whole pre-public TODO is otherwise clear.
 
 ## Working on this box without Nix (the key recipe)
 
