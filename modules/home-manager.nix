@@ -10,8 +10,8 @@ let
   ccvmPkg = (mkCcvm {
     inherit (cfg)
       package autoUpdateFiles memory cores extraPackages mountHostNixStore
-      apiKeyVariable shareHostConfig lockGuestMemory egressAllowlist egressPorts
-      extraGuestModules;
+      apiKeyVariable shareClaudeConfig shareGitConfig lockGuestMemory
+      egressAllowlist egressPorts extraGuestModules;
   }).wrapper;
 in
 {
@@ -71,7 +71,7 @@ in
       description = "Name of the host env var carrying the Anthropic API key. Passed to the VM only over the encrypted SSH channel (SendEnv); never written to disk or argv.";
     };
 
-    shareHostConfig = lib.mkOption {
+    shareClaudeConfig = lib.mkOption {
       type = lib.types.bool;
       default = true;
       description = ''
@@ -81,7 +81,24 @@ in
         (e.g. settings.json -> /nix/store/…) are dereferenced so they resolve inside the VM.
         Claude's writes go to an ephemeral overlay and do not persist back to the host; the
         OAuth credential is exposed read-only and never copied to disk. false: share nothing
-        from ~/.claude (more isolated). Per-run override: `CCVM_SHARE_CONFIG=0|1`.
+        from ~/.claude (more isolated). Per-run override: `CCVM_SHARE_CLAUDE_CONFIG=0|1`.
+      '';
+    };
+
+    shareGitConfig = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        true (default): stage a SANITIZED copy of your global git config into the VM (laid at
+        ~/.config/git/config) so in-VM `git` commits as you, with your aliases and global
+        ignores — like native `claude`. "Sanitized" means host-only settings that would dangle
+        or leak are dropped: any value pointing into /nix/store (home-manager's editor / pager /
+        delta / gh credential-helper paths), all credential.* helpers (no host credentials cross
+        the boundary — ~/.ssh and gh tokens are never shared), and signing is force-disabled
+        (the signing key is deliberately not carried, so a leftover commit.gpgsign would only
+        break commits). The global core.excludesfile is staged by content to the VM's default
+        ignore path. Commits work as you; pushing to an SSH remote still needs credentials the
+        VM does not have (by design). false: stage nothing. Per-run: CCVM_SHARE_GIT_CONFIG=0|1.
       '';
     };
 

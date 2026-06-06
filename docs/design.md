@@ -175,11 +175,11 @@ in the environment. `ps`, `/proc/<pid>/cmdline`, and the scratch dir never see i
 (put a literal `VAR=value` on the ssh command line), precisely because `SetEnv` would
 place the secret in argv.
 
-`shareHostConfig` (**on by default**, so ccvm mirrors native `claude`) is the other way to
+`shareClaudeConfig` (**on by default**, so ccvm mirrors native `claude`) is the other way to
 authenticate: it surfaces the host's `~/.claude` (settings, custom commands, global memory,
 and the OAuth credential) inside the VM as the read-only **lower** of an overlay, with a
-tmpfs **upper** for claude's own writes. Set `CCVM_SHARE_CONFIG=0` to disable it for one run
-(or `=1` to force it on); the env var overrides the baked `shareHostConfig` default.
+tmpfs **upper** for claude's own writes. Set `CCVM_SHARE_CLAUDE_CONFIG=0` to disable it for one run
+(or `=1` to force it on); the env var overrides the baked `shareClaudeConfig` default.
 The OAuth credential therefore rides the read-only 9p mount and is **never copied into the
 scratch dir or the seed** — only the non-secret home-root `~/.claude.json` is staged through
 the seed and installed into the writable home. Claude's writes (including token refreshes)
@@ -196,7 +196,7 @@ secret), and only escaping links are dereferenced — internal relative links al
 the mount. This is what makes a home-manager-managed config readable in the VM regardless of
 whether the host `/nix/store` is shared.
 
-A key is **not required**, though. With no `ANTHROPIC_API_KEY` set and `shareHostConfig`
+A key is **not required**, though. With no `ANTHROPIC_API_KEY` set and `shareClaudeConfig`
 turned off (or no host `~/.claude` to share), the wrapper warns (it no longer aborts) and
 starts claude unauthenticated, so the in-VM **`/login` web-auth flow** works: claude prints an
 authorization URL, you open it in your host browser and paste the resulting code back into
@@ -211,6 +211,25 @@ process memory, so a memory-pressured host kernel *could* page it out to swap. `
 mlocks the guest so it can never reach the host's possibly-unencrypted swap. It needs a large
 enough `RLIMIT_MEMLOCK` or QEMU won't start. This — not full-disk encryption, which is moot
 when there is no persistent disk — is the relevant at-rest protection for an all-RAM VM.
+
+**Git config passthrough.** For the same native-fidelity reason as `shareClaudeConfig`, ccvm
+stages the host's git identity into the VM (`shareGitConfig`, on by default) so in-VM `git`
+commits as you, with your aliases and global ignores. It cannot be a verbatim copy: a
+home-manager-managed `~/.config/git/config` is full of absolute `/nix/store/…` paths (editor,
+pager, `delta`, the `gh` credential helper) that don't exist in the guest — the same dangling-
+symlink class of problem as the `~/.claude` config, but here the dead values are *inline*, not
+symlinks. So the wrapper resolves the **global** config host-side (where git and the store
+both exist) and writes a **sanitized** copy to the seed, applying four rules: drop any setting
+whose value contains `/nix/store/` (host-only tool paths); drop every `credential.*` helper
+(no host credentials cross the boundary — consistent with `~/.ssh` never being shared); stage
+the resolved `core.excludesfile` *content* to the guest's default ignore path; and force
+`commit.gpgsign`/`tag.gpgsign` off (the signing key is never carried, and a stray `gpgsign =
+true` would otherwise break every in-VM commit). The guest's seed service lays the result at
+`~/.config/git/config`/`ignore`, owned by the (uid-remapped) agent user. Only non-secret
+config is ever written to the seed — the same invariant as the API key and the OAuth
+credential, and it is checked the same way (a host-side test greps the seed). The deliberate
+gap: `git push` to an SSH remote still can't authenticate in the VM, because the credential to
+do so is exactly what we refuse to carry — in overlay mode you export from the host instead.
 
 ### 3.8 The microvm.nix runtime-share trap
 
@@ -243,7 +262,7 @@ Anthropic API and anything else it wants — `WebFetch` URLs, `npm`/`pip`/`git c
 the deliberate native-mirroring default and is fine for the *containment* goal (the agent
 still can't touch the host beyond the CWD), but it leaves one gap: a prompt-injected or
 compromised agent can **exfiltrate** the shared project tree — or, under the default
-`shareHostConfig`, the host OAuth credential it can read in-VM — to an arbitrary host.
+`shareClaudeConfig`, the host OAuth credential it can read in-VM — to an arbitrary host.
 
 The on-threat-model answer is an **egress allowlist**, not anonymity, and it is now
 **implemented as an opt-in mode** (`egressAllowlist` / `egressPorts`). An empty list (the
@@ -361,6 +380,6 @@ session itself ends.
   is a human smoke test by nature (README checklist), and teardown is verified by inspection.
 - **aarch64-linux is best-effort.** It evaluates and is wired up, but the primary,
   CI-built target is x86_64-linux.
-- **`shareHostConfig` is read-only.** The in-VM Claude's writes to its config — including
+- **`shareClaudeConfig` is read-only.** The in-VM Claude's writes to its config — including
   OAuth token refreshes — stay in the ephemeral overlay and do not persist back to the
   host (§3.7).

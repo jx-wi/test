@@ -12,11 +12,11 @@ let
   # The same wrapper template the real build uses, with stand-in boot tokens (the dry-run
   # hook exits before QEMU, so kernel/initrd/store are never read). `egressAllow`/`egressPorts`
   # let a check pick the baked egress posture; everything else stays at the production
-  # defaults (share-config on, rw mode, open egress).
+  # defaults (share-claude-config on, rw mode, open egress).
   mkDryRunWrapper = { egressAllow ? "", egressPorts ? "443" }:
     pkgs.writeShellApplication {
       name = "ccvm";
-      runtimeInputs = with pkgs; [ coreutils openssh findutils getent ];
+      runtimeInputs = with pkgs; [ coreutils openssh findutils getent git ];
       text = builtins.replaceStrings
         [
           "@KERNEL@"
@@ -27,7 +27,8 @@ let
           "@CORES@"
           "@MODE@"
           "@APIKEYVAR@"
-          "@SHARECONFIG@"
+          "@SHARECLAUDE@"
+          "@SHAREGIT@"
           "@MOUNTHOSTSTORE@"
           "@HOSTSTOREPATH@"
           "@QEMU@"
@@ -45,7 +46,8 @@ let
           "4" # CORES
           "rw" # MODE          (production default: autoUpdateFiles=true)
           "ANTHROPIC_API_KEY" # APIKEYVAR
-          "1" # SHARECONFIG    (production default: shareHostConfig=true)
+          "1" # SHARECLAUDE    (production default: shareClaudeConfig=true)
+          "1" # SHAREGIT       (production default: shareGitConfig=true)
           "0" # MOUNTHOSTSTORE
           "/nix/store" # HOSTSTOREPATH
           "true" # QEMU        (never invoked under dry run)

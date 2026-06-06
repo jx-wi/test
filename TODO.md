@@ -33,10 +33,22 @@ half-remembered context.
 - **Branch `egress-allowlist`:** fully merged and re-verified; **safe to delete**
   (`git branch -d egress-allowlist`).
 - **No git remote** is configured: every merge so far is local-only (see #5).
-- **`host.sh` on merged `main` = 18 assertions** (15 base + 2 uid/gid #4 + 1 egress
-  default-open #2); `egress.sh` = 6. Both verified host-side via the dry-run recipe.
-- **Next item: #5** (replace `jx-wi` placeholders + add a git remote) — fully doable on this
-  box, but needs the user to confirm the real GitHub org/identity first.
+- **`host.sh` = 26 assertions** (15 base + 2 uid/gid #4 + 1 egress default-open #2 + 8 git
+  passthrough #7); `egress.sh` = 6. Verified host-side via the dry-run recipe (26/26 green here).
+- **`boot.sh` now has 5 new git assertions** (config present/identity/sanitized/signing-off/
+  ignore-present in the rw scenario) — **needs a Nix+KVM box to run** (still unverified here).
+- **#5 placeholder half resolved:** `jx-wi` is the user's real GitHub handle (confirmed
+  2026-06-06) — no substitution needed; the repo will live at `github.com/jx-wi/ccvm`. The git
+  REMOTE is still unconfigured (every merge is local). #7's git-config passthrough was done
+  instead of #5's remote wiring (user redirected: native git devex first).
+- **`@SHAREGIT@` is a new baked token** (shareGitConfig); the wrapper now needs `git` in its
+  runtimeInputs (added in `lib/mkccvm.nix` AND `tests/default.nix`).
+- **RENAME (2026-06-06):** `shareHostConfig` → **`shareClaudeConfig`** (option), with the env
+  var `CCVM_SHARE_CONFIG` → **`CCVM_SHARE_CLAUDE_CONFIG`**, baked token `@SHARECONFIG@` →
+  **`@SHARECLAUDE@`**, and seed marker `share-config` → **`share-claude-config`** — so it reads
+  as a clean parallel to `shareGitConfig`/`CCVM_SHARE_GIT_CONFIG`. Breaking, but pre-public so
+  fine. Older sections of this file below were mechanically renamed too; that's why #3 reads as
+  "dead `shareClaudeConfig` guest option" (it was literally named `shareHostConfig` at the time).
 
 ## Working on this box without Nix (the key recipe)
 
@@ -50,7 +62,8 @@ WRAP=$(mktemp -d)/ccvm
 { printf '#!/usr/bin/env bash\nset -euo pipefail\n'
   sed -e 's#@KERNEL@#/dev/null#g' -e 's#@INITRD@#/dev/null#g' -e 's#@STOREIMG@#/dev/null#g' \
       -e 's#@APPEND@#console=ttyS0#g' -e 's#@MEMORY@#4096#g' -e 's#@CORES@#4#g' \
-      -e 's#@MODE@#rw#g' -e 's#@APIKEYVAR@#ANTHROPIC_API_KEY#g' -e 's#@SHARECONFIG@#1#g' \
+      -e 's#@MODE@#rw#g' -e 's#@APIKEYVAR@#ANTHROPIC_API_KEY#g' -e 's#@SHARECLAUDE@#1#g' \
+      -e 's#@SHAREGIT@#1#g' \
       -e 's#@MOUNTHOSTSTORE@#0#g' -e 's#@HOSTSTOREPATH@#/nix/store#g' -e 's#@QEMU@#true#g' \
       -e 's#@DEFAULTMACHINE@#microvm#g' -e 's#@MEMLOCK@#0#g' wrapper/ccvm.sh
 } > "$WRAP"; chmod +x "$WRAP"
@@ -94,7 +107,7 @@ Merged to `main` (local; no git remote configured yet — see #5).
 
 ## 2. ✅ Default-mode credential-exfil tradeoff + egress allowlist — DONE, MERGED to `main` (`b461ca1`)
 
-**Problem (the block):** in the default posture (`shareHostConfig=true` + `autoUpdateFiles=true`
+**Problem (the block):** in the default posture (`shareClaudeConfig=true` + `autoUpdateFiles=true`
 + open egress, all defaults), the host OAuth credential is readable by the agent inside the VM
 and the network is wide open — a prompt-injected/compromised agent could exfiltrate the project
 tree or that credential. The VM still can't touch the host FS, but containment ≠ exfil-proof.
@@ -136,22 +149,22 @@ on merged `main`** — the guest now runs the uid remap and the egress firewall 
 
 ---
 
-## 3. ✅ Dead `shareHostConfig` guest option — DONE (`main` working tree)
+## 3. ✅ Dead `shareClaudeConfig` guest option — DONE (`main` working tree)
 
-`guest/default.nix` declared `ccvm.shareHostConfig` but **nothing in the guest read it** — the
-wrapper does all the sharing work and the guest keys off `seed/share-config`. It was a misleading
+`guest/default.nix` declared `ccvm.shareClaudeConfig` but **nothing in the guest read it** — the
+wrapper does all the sharing work and the guest keys off `seed/share-claude-config`. It was a misleading
 option that looked load-bearing.
 
 **Done:**
-- Removed the `shareHostConfig` option from `guest/default.nix` (replaced with a NOTE comment
-  pointing at the real flow: wrapper → `seed/share-config` → `launcher.nix`).
+- Removed the `shareClaudeConfig` option from `guest/default.nix` (replaced with a NOTE comment
+  pointing at the real flow: wrapper → `seed/share-claude-config` → `launcher.nix`).
 - Stopped passing it into the guest module from `lib/mkccvm.nix` (the `inherit (config) …` list).
 - **Left untouched** the genuinely load-bearing host-side path: the home-manager
-  `programs.ccvm.shareHostConfig` user option → `mkccvm` `config.shareHostConfig` →
-  baked `@SHARECONFIG@` in the wrapper. That is the real default knob.
+  `programs.ccvm.shareClaudeConfig` user option → `mkccvm` `config.shareClaudeConfig` →
+  baked `@SHARECLAUDE@` in the wrapper. That is the real default knob.
 
 Pure removal of a dead/unread option — no behaviour change. Verified by inspection +
-`grep`: the only surviving `shareHostConfig` references are the host-side default chain.
+`grep`: the only surviving `shareClaudeConfig` references are the host-side default chain.
 **Unverified here** (no Nix CLI on this box): `nix flake check` guest eval — should be a
 no-op since the option had no readers, but confirm green on a Nix box before relying on it.
 
@@ -215,7 +228,7 @@ so far are local-only.
   the wrapper propagates the remote exit code, so a clean run looked like a failure. Verified:
   `bash tests/boot.sh` 7/7 clean on the Nix+KVM box.
 - ⬜ Dedupe default values between `lib/mkccvm.nix` `defaults` and `modules/home-manager.nix`
-  option defaults (two sources of truth for `memory`/`cores`/`shareHostConfig`/… → drift risk).
+  option defaults (two sources of truth for `memory`/`cores`/`shareClaudeConfig`/… → drift risk).
 - ⬜ **Add `meta` info to the flake.** `nix flake check` warns `app 'apps.x86_64-linux.ccvm'`
   and `…default` "lacks attribute 'meta'". Add `meta` (description/license/maintainers/
   mainProgram) to the flake's `packages`/`apps` outputs to silence it and make `nix run`/search
@@ -224,15 +237,33 @@ so far are local-only.
 
 ---
 
-## 7. ⬜ git identity passthrough + the `git push` export story — NEW
+## 7. 🟡 git identity passthrough + the `git push` export story — commit half DONE
 
-`~/.gitconfig` is not passed through (only the CWD crosses the boundary), so in-VM `git commit`
-fails without repo-local identity. Worse, `~/.ssh` is **deliberately** unshared, yet the docs tell
-you to "export via `git push`" in overlay mode — which can't authenticate to an SSH remote.
-**Action:** reconcile. Options: stage a minimal identity (`user.name`/`user.email`) from host
-gitconfig via the seed; document an HTTPS-token push path; or surface the limitation clearly.
-Pairs with #4 (both are host-identity boundary issues) and #8 (the default blurb is the natural
-place to tell the agent how to handle commits given no identity).
+**Done — `shareGitConfig` (default on):** the wrapper stages a SANITIZED copy of the host's
+GLOBAL git config into the seed (`seed/gitconfig`/`gitignore`); the guest seed service lays it
+at `~/.config/git/config`/`ignore` owned by the (uid-remapped) agent user, so in-VM `git commit`
+works as you, with your aliases + global ignores. Sanitization (the home-manager wrinkle: the
+config is full of inline `/nix/store` tool paths, not symlinks): drop any value containing
+`/nix/store/`, drop all `credential.*` (no host creds cross), stage `core.excludesfile` by
+content, force `commit.gpgsign`/`tag.gpgsign` off (signing key never carried). Runtime override
+`CCVM_SHARE_GIT_CONFIG=0|1`. New option `programs.ccvm.shareGitConfig`, token `@SHAREGIT@`.
+Files: `wrapper/ccvm.sh` (staging block), `guest/launcher.nix` (install), `lib/mkccvm.nix` +
+`modules/home-manager.nix` (option/token/default + `git` in wrapper runtimeInputs),
+`tests/{host.sh,boot.sh,stub-claude.sh,default.nix}`, README + design §3.7 + CLAUDE.md.
+**Verified host-side here:** `tests/host.sh` 26/26 (the 8 new §8 git assertions: identity/alias
+carried, `/nix/store` stripped, credential helper stripped, signing forced off, ignore content
+staged, opt-out stages nothing) via the dry-run recipe — and an eyeball dump of the sanitized
+config. **Unverified here** (needs Nix+KVM): `nix flake check` (guest eval + the new token) and
+`bash tests/boot.sh` (the 5 new GUEST-side git assertions — config present, identity, sanitized,
+signing off, ignore present — under a real boot).
+
+**Still ⬜ — the push/export story:** `~/.ssh` is **deliberately** unshared, so `git push` to an
+SSH remote can't authenticate in the VM; the README now states this honestly (commit works,
+push doesn't; export from the host in overlay mode). Open: optionally document an HTTPS-token
+push path. Also `core.editor`/bare-command settings transfer as names (e.g. `nvim`) that may not
+exist in the guest — git falls back to its built-ins (guest ships `vim`/`less`); documented.
+Pairs with #8 (the default CLAUDE.md blurb is the natural place to tell the agent commits work
+but pushes don't).
 
 ---
 

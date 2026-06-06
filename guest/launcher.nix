@@ -126,7 +126,7 @@ let
       # with a tmpfs upper for claude's own writes — so its state is usable but ephemeral and
       # never persists back to the host. The home-root ~/.claude.json is staged via the seed
       # (it is config, not the secret token) and installed into the writable home.
-      if [ -f "$seed/share-config" ]; then
+      if [ -f "$seed/share-claude-config" ]; then
         mkdir -p /run/ccvm-host-claude
         if mount -t 9p -o ${p9},ro ccvm-config /run/ccvm-host-claude 2>/dev/null; then
           install -d -m 700 -o ccvm -g users /home/ccvm/.claude
@@ -221,6 +221,17 @@ let
           } >/run/ccvm-egress-fallback.nft
           nft -f /run/ccvm-egress-fallback.nft 2>/dev/null || true
         fi
+      fi
+
+      # Sanitized host git config (shareGitConfig): the wrapper stripped host-only /nix/store
+      # tool paths and credentials, so this is safe to lay at the guest's XDG git paths. Owned
+      # by ccvm (post-remap) so in-VM `git` reads it as the agent user. install -D makes the
+      # parent dirs (root-owned 0755 — readable/traversable by ccvm, which is all git needs).
+      if [ -f "$seed/gitconfig" ]; then
+        install -D -m 644 -o ccvm -g users "$seed/gitconfig" /home/ccvm/.config/git/config
+      fi
+      if [ -f "$seed/gitignore" ]; then
+        install -D -m 644 -o ccvm -g users "$seed/gitignore" /home/ccvm/.config/git/ignore
       fi
 
       # An `if` (not a trailing `[ -f … ] && …`): under `set -e` a bare conditional as the

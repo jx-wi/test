@@ -34,10 +34,10 @@ in
       default = [ ];
       description = "Extra packages available inside the guest.";
     };
-    # NOTE: host-config sharing is driven entirely by the wrapper + the `seed/share-config`
+    # NOTE: host-config sharing is driven entirely by the wrapper + the `seed/share-claude-config`
     # flag (read by launcher.nix), NOT by a guest option — so there is deliberately no
-    # `shareHostConfig` option here. The host-side default lives in lib/mkccvm.nix and is
-    # baked into the wrapper as @SHARECONFIG@.
+    # `shareClaudeConfig` option here. The host-side default lives in lib/mkccvm.nix and is
+    # baked into the wrapper as @SHARECLAUDE@.
     mountHostNixStore = lib.mkOption {
       type = lib.types.bool;
       default = false;

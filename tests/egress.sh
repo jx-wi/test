@@ -36,7 +36,7 @@ mkdir -p "$XDG_RUNTIME_DIR"
 export CCVM_DRYRUN=1
 export HOME="$WORK/home"
 mkdir -p "$HOME"
-export CCVM_SHARE_CONFIG=0
+export CCVM_SHARE_CLAUDE_CONFIG=0
 
 cwd="$(mktemp -d "$WORK/cwd.XXXXXX")"
 SEED="$(cd "$cwd" && "$CCVM")/seed"

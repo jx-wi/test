@@ -19,7 +19,8 @@ APPEND="@APPEND@"
 MEMORY="@MEMORY@"
 CORES="@CORES@"
 APIKEYVAR="@APIKEYVAR@"
-SHARECONFIG="@SHARECONFIG@"
+SHARECLAUDE="@SHARECLAUDE@"
+SHAREGIT="@SHAREGIT@" # 1 = stage a sanitized host git config into the guest; 0 = off
 MOUNTHOSTSTORE="@MOUNTHOSTSTORE@"
 HOSTSTOREPATH="@HOSTSTOREPATH@"
 MODE="@MODE@" # rw (autoUpdateFiles=true, default — mirrors native claude) | overlay (secure)
@@ -139,12 +140,19 @@ case "${CCVM_AUTOUPDATE:-}" in
 esac
 [[ -n $MODE_OVERRIDE ]] && MODE="$MODE_OVERRIDE"
 
-# Host-config sharing precedence: CCVM_SHARE_CONFIG overrides the baked default
-# (shareHostConfig, now true by default). Lets `CCVM_SHARE_CONFIG=0 ccvm` opt out — or
+# Host-config sharing precedence: CCVM_SHARE_CLAUDE_CONFIG overrides the baked default
+# (shareClaudeConfig, now true by default). Lets `CCVM_SHARE_CLAUDE_CONFIG=0 ccvm` opt out — or
 # `=1` opt back in — on any invocation, without rebuilding the package.
-case "${CCVM_SHARE_CONFIG:-}" in
-  1 | true | yes) SHARECONFIG=1 ;;
-  0 | false | no) SHARECONFIG=0 ;;
+case "${CCVM_SHARE_CLAUDE_CONFIG:-}" in
+  1 | true | yes) SHARECLAUDE=1 ;;
+  0 | false | no) SHARECLAUDE=0 ;;
+esac
+
+# Git-config sharing precedence: CCVM_SHARE_GIT_CONFIG overrides the baked shareGitConfig
+# default for one run, same pattern as above.
+case "${CCVM_SHARE_GIT_CONFIG:-}" in
+  1 | true | yes) SHAREGIT=1 ;;
+  0 | false | no) SHAREGIT=0 ;;
 esac
 
 # Guest-memory locking precedence: CCVM_MLOCK overrides the baked lockGuestMemory default for
@@ -190,8 +198,8 @@ fi
 # config, claude simply starts unauthenticated: run its in-VM `/login` (web/OAuth)
 # flow — copy the printed URL into your browser, paste the code back. Anything obtained
 # that way lives only in the VM's tmpfs and evaporates on exit (ephemeral, by design).
-if [[ $SHELL_MODE != 1 && $SHARECONFIG != 1 && -z ${!APIKEYVAR:-} ]]; then
-  warn "\$$APIKEYVAR is not set and shareHostConfig is off — starting Claude unauthenticated. Run /login inside the VM for web auth (its credentials stay in the VM and vanish on exit)."
+if [[ $SHELL_MODE != 1 && $SHARECLAUDE != 1 && -z ${!APIKEYVAR:-} ]]; then
+  warn "\$$APIKEYVAR is not set and shareClaudeConfig is off — starting Claude unauthenticated. Run /login inside the VM for web auth (its credentials stay in the VM and vanish on exit)."
 fi
 
 # mlock preflight: QEMU started with mem-lock=on aborts if it cannot lock the guest RAM, so
@@ -289,13 +297,13 @@ WS_FSDEV="local,id=ws,path=$WORKDIR,security_model=none"
 # guest overlays both onto a writable tmpfs, so claude's writes are ephemeral and never
 # reach the host.
 CONFIG_ARGS=()
-if [[ $SHARECONFIG == 1 ]]; then
+if [[ $SHARECLAUDE == 1 ]]; then
   if [[ -d "$HOME/.claude" ]]; then
     # Resolve the root so a home-manager-symlinked ~/.claude is exported as the real dir.
     CFGPATH="$(readlink -f "$HOME/.claude")"
     CONFIG_ARGS+=(-fsdev "local,id=cfg,path=$CFGPATH,security_model=none,readonly=on")
     CONFIG_ARGS+=(-device "virtio-9p-$BUS,fsdev=cfg,mount_tag=ccvm-config")
-    printf '1' >"$SEED/share-config"
+    printf '1' >"$SEED/share-claude-config"
 
     # home-manager (and other dotfile managers) populate ~/.claude with symlinks whose
     # targets live OUTSIDE the tree — e.g. settings.json -> /nix/store/…-home-manager-files/…
@@ -321,6 +329,58 @@ if [[ $SHARECONFIG == 1 ]]; then
     find "$SEED/config-deref" -name '.credentials.json' -delete 2>/dev/null || true
   fi
   [[ -f "$HOME/.claude.json" ]] && cp "$HOME/.claude.json" "$SEED/claude-json"
+fi
+
+# ---- git config passthrough (default on) -----------------------------------
+# Native devex: in-VM `git` should commit as you, with your aliases and global ignores —
+# like native claude. We stage a SANITIZED copy of your GLOBAL git config into the seed (the
+# guest lays it at ~/.config/git/config). Sanitized because home-manager writes absolute
+# /nix/store/… paths for the editor/pager/diff tools and the gh credential helper — those
+# paths don't exist in the guest, so carried verbatim they would dangle (broken pager) or
+# fail commits. So we:
+#   * drop any setting whose value points into /nix/store (host-only tool paths),
+#   * drop credential.* entirely (no host credentials cross into the VM; ~/.ssh and gh tokens
+#     are never shared — `git commit` works, `git push` to an SSH remote is out of scope),
+#   * stage core.excludesfile's resolved CONTENT to the guest's default ignore path,
+#   * force-disable commit/tag signing (the signing key is deliberately not carried; a leftover
+#     gpgsign=true would otherwise break `git commit` in the guest).
+# Non-secret config only — never the API key or any credential. Best-effort: a hiccup here must
+# not block the launch. Runtime override: CCVM_SHARE_GIT_CONFIG=0|1.
+if [[ $SHAREGIT == 1 ]] && command -v git >/dev/null 2>&1 &&
+  [[ -n "$(git config --global --list 2>/dev/null)" ]]; then
+  staged="$SEED/gitconfig"
+  : >"$staged"
+  # Global key/value pairs, NUL-delimited (key\nvalue\0) so values with spaces/newlines
+  # survive. Keep everything except host-only/store-path settings and credentials.
+  while IFS= read -r -d '' pair; do
+    key="${pair%%$'\n'*}"
+    val="${pair#*$'\n'}"
+    case "$key" in
+      credential.*) continue ;;                 # no host credentials inside the VM
+      core.excludesfile) continue ;;            # staged separately as the default ignore file
+      commit.gpgsign | tag.gpgsign) continue ;; # forced off below
+    esac
+    case "$val" in
+      */nix/store/*) continue ;; # home-manager tool path — would dangle in the guest
+    esac
+    git config --file "$staged" "$key" "$val" || true
+  done < <(git config --global --list -z 2>/dev/null)
+  # The signing key lives in ~/.ssh / the host keyring and is never shared, so disable signing
+  # or `git commit` would fail in the guest.
+  git config --file "$staged" commit.gpgsign false || true
+  git config --file "$staged" tag.gpgsign false || true
+  # Drop the file if nothing survived sanitization beyond the forced gpgsign lines (keeps the
+  # guest from installing a near-empty config). user.name/aliases/etc. make it worth staging.
+  if [[ "$(git config --file "$staged" --list 2>/dev/null | grep -cv '^\(commit\|tag\)\.gpgsign=')" == 0 ]]; then
+    rm -f "$staged"
+  fi
+  # Global ignore: stage the RESOLVED contents at the guest's XDG-default ignore path so your
+  # personal ignores apply even though the host excludesfile path doesn't exist in the guest.
+  ex="$(git config --global --path core.excludesfile 2>/dev/null || true)"
+  if [[ -n $ex ]]; then
+    exreal="$(readlink -f "$ex" 2>/dev/null || true)"
+    [[ -n $exreal && -r $exreal ]] && cp -L "$exreal" "$SEED/gitignore"
+  fi
 fi
 
 # ---- egress allowlist (opt-in) --------------------------------------------

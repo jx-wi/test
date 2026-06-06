@@ -77,7 +77,7 @@ you log in with lives only in the VM and is gone on exit.
   programs.ccvm = {
     enable = true;
     # autoUpdateFiles = false;           # opt into the read-only safety net (default: true)
-    # shareHostConfig = false;           # stop reusing your host ~/.claude (default: true)
+    # shareClaudeConfig = false;           # stop reusing your host ~/.claude (default: true)
     # extraPackages = with pkgs; [ go gopls python3 ];  # project toolchains
   };
 }
@@ -112,7 +112,8 @@ Those `ccvm` flags are intercepted by the wrapper and are **not** forwarded to c
 | `extraPackages` | `[ ]` | Extra tools inside the VM (a sensible base set is always present). |
 | `mountHostNixStore` | `false` | Share host `/nix/store` (ro) instead of a self-contained image — smaller/faster, less isolated. |
 | `apiKeyVariable` | `"ANTHROPIC_API_KEY"` | Host env var carrying the key; passed only via SSH `SendEnv`. |
-| `shareHostConfig` | `true` | Mount the host `~/.claude` (ro) so the VM reuses your login, settings, commands and memory (home-manager symlinks are dereferenced); writes stay ephemeral. Per-run: `CCVM_SHARE_CONFIG=0\|1`. |
+| `shareClaudeConfig` | `true` | Mount the host `~/.claude` (ro) so the VM reuses your login, settings, commands and memory (home-manager symlinks are dereferenced); writes stay ephemeral. Per-run: `CCVM_SHARE_CLAUDE_CONFIG=0\|1`. |
+| `shareGitConfig` | `true` | Stage a **sanitized** copy of your global git config into the VM (`~/.config/git/config`) so in-VM `git` commits as you, with your aliases and global ignores. Host-only `/nix/store` tool paths (editor/pager/delta/gh helper), all `credential.*`, and commit signing are stripped — nothing secret crosses, nothing dangles. See [Git config in the VM](#git-config-in-the-vm). Per-run: `CCVM_SHARE_GIT_CONFIG=0\|1`. |
 | `lockGuestMemory` | `false` | mlock the guest RAM (QEMU `mem-lock=on`) so it can't be paged to the host's (possibly unencrypted) swap — keeps in-VM secrets off persistent storage. Needs sufficient `RLIMIT_MEMLOCK`. Per-run: `CCVM_MLOCK=0\|1`. |
 | `egressAllowlist` | `[ ]` | **Opt-in.** Empty = open egress (native default). Non-empty switches the guest to a default-deny egress firewall allowing only these FQDN/IP/CIDR destinations (`api.anthropic.com` auto-included) — closes the *direct* exfiltration channel (DNS-to-stub-resolver stays open as a residual channel). See [Threat model & network egress](#threat-model--network-egress). |
 | `egressPorts` | `[ 443 ]` | Destination ports the allowlist permits (only when `egressAllowlist` is set). Add `80` for plain-HTTP mirrors. |
@@ -124,7 +125,8 @@ Those `ccvm` flags are intercepted by the wrapper and are **not** forwarded to c
 |---|---|
 | `ccvm --auto-update-files` / `--no-auto-update-files` | Force file-sharing mode for one run (wins over `CCVM_AUTOUPDATE`); intercepted, not forwarded to claude. |
 | `CCVM_AUTOUPDATE=1\|0` | Override the file-sharing mode for one run. |
-| `CCVM_SHARE_CONFIG=1\|0` | Override host `~/.claude` sharing for one run (wins over the baked `shareHostConfig`). |
+| `CCVM_SHARE_CLAUDE_CONFIG=1\|0` | Override host `~/.claude` sharing for one run (wins over the baked `shareClaudeConfig`). |
+| `CCVM_SHARE_GIT_CONFIG=1\|0` | Override git-config staging for one run (wins over the baked `shareGitConfig`). |
 | `CCVM_MLOCK=1\|0` | Lock (or unlock) the guest RAM for one run (overrides the baked `lockGuestMemory`). |
 | `CCVM_MEMORY=<MiB>` | Override the guest RAM (MiB) for one run, no rebuild — e.g. `CCVM_MEMORY=16384` for a big dependency closure. |
 | `CCVM_SHELL=1` / `ccvm --shell` | Drop into a debug **zsh** in the guest instead of claude. |
@@ -159,6 +161,31 @@ pass `CCVM_MLOCK=0` for a single run — guest RAM may then reach host swap, the
 trade-off. The wrapper runs a preflight check and prints a loud warning (with these same
 fixes) when the limit looks too low.
 
+### Git config in the VM (`shareGitConfig` / `CCVM_SHARE_GIT_CONFIG`)
+
+So in-VM `git` behaves like native — commits as *you*, with your aliases and global ignores —
+ccvm stages a **sanitized** copy of your global git config into the guest at
+`~/.config/git/config` (on by default). It can't carry the config verbatim: home-manager
+writes absolute `/nix/store/…` paths for your editor, pager, `delta`, and the `gh` credential
+helper, and those paths don't exist in the guest. So the wrapper resolves your config and:
+
+- **drops any setting whose value points into `/nix/store`** (the host-only tool paths — they'd
+  dangle or break `git`),
+- **drops every `credential.*` helper** — no host credentials cross the boundary (`~/.ssh` and
+  your `gh` token are never shared),
+- **stages the content of your global `core.excludesfile`** to the guest's default ignore path,
+- **force-disables commit/tag signing** — your signing key is deliberately never carried, so a
+  leftover `commit.gpgsign = true` would only break `git commit` inside the VM.
+
+The result: **`git commit` works as you out of the box.** Two honest consequences follow from
+*not* carrying credentials or keys: **`git push` to an SSH remote won't authenticate** inside
+the VM (there's no key to do it with — in overlay mode, export edits from the host side
+instead), and **commits aren't signed**. Settings that name a *bare* command (e.g.
+`core.editor = nvim`) are kept as-is; if that program isn't in the guest, `git` falls back to
+its built-ins (the guest ships `vim` and `less`). Turn the whole thing off with
+`shareGitConfig = false` or `CCVM_SHARE_GIT_CONFIG=0`. Only non-secret config is ever staged —
+never the API key, never a credential.
+
 ---
 
 ## Threat model & network egress
@@ -170,7 +197,7 @@ can reach anything outbound, so `npm`/`pip`/`git clone`/`WebFetch` all work. Tha
 deliberate native-mirroring default — and it leaves one real gap worth understanding:
 
 > **In the default posture, a prompt-injected or compromised agent could exfiltrate data.**
-> With `shareHostConfig = true` (default) your host `~/.claude` — *including the OAuth
+> With `shareClaudeConfig = true` (default) your host `~/.claude` — *including the OAuth
 > credential* — is readable inside the VM, and with open egress the agent could POST the
 > project tree or that credential to an arbitrary host. The VM still can't touch your host
 > filesystem, but containment ≠ exfiltration-proof.
@@ -179,7 +206,7 @@ This is inherent to mirroring native `claude` (reusing your host login *means* t
 is in the VM). Your options, cheapest first:
 
 - **Authenticate with an API key instead of OAuth** (`export ANTHROPIC_API_KEY=…`, and
-  `shareHostConfig = false`): then no long-lived OAuth credential is exposed to the agent at
+  `shareClaudeConfig = false`): then no long-lived OAuth credential is exposed to the agent at
   all — the key rides the SSH channel and is the only secret in the VM.
 - **Lock down the network with `egressAllowlist`** (opt-in; the default stays open so native
   behaviour is unchanged):
@@ -274,7 +301,7 @@ And the read-only safety net — launch with `ccvm --no-auto-update-files`:
 
 - **x86_64-linux** is the primary, CI-built target; **aarch64-linux** is best-effort
   (evaluates and is wired up).
-- `shareHostConfig` is read-only: changes the in-VM Claude makes to its config (including
+- `shareClaudeConfig` is read-only: changes the in-VM Claude makes to its config (including
   OAuth token refreshes) stay in the VM and do not persist back to the host.
 
 ## License

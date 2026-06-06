@@ -21,7 +21,12 @@ let
     extraPackages = [ ];
     mountHostNixStore = false;
     apiKeyVariable = "ANTHROPIC_API_KEY";
-    shareHostConfig = true;
+    shareClaudeConfig = true;
+    # Reuse the host's git identity/aliases/ignores inside the VM so in-VM `git` behaves like
+    # native (commits as you). On by default (native-mirroring spirit). The wrapper stages a
+    # SANITIZED copy of the global git config — host-only /nix/store tool paths and credentials
+    # are stripped — so nothing secret crosses and nothing dangles. Per-run: CCVM_SHARE_GIT_CONFIG.
+    shareGitConfig = true;
     lockGuestMemory = false;
     # Egress allowlist (opt-in). Empty list = open egress (the native default — npm/pip/git
     # clone/WebFetch all work like native claude). A non-empty list switches the guest to a
@@ -80,7 +85,7 @@ let
 
   wrapper = pkgs.writeShellApplication {
     name = "ccvm";
-    runtimeInputs = with pkgs; [ qemu coreutils openssh findutils getent ];
+    runtimeInputs = with pkgs; [ qemu coreutils openssh findutils getent git ];
     text = builtins.replaceStrings
       [
         "@KERNEL@"
@@ -91,7 +96,8 @@ let
         "@CORES@"
         "@MODE@"
         "@APIKEYVAR@"
-        "@SHARECONFIG@"
+        "@SHARECLAUDE@"
+        "@SHAREGIT@"
         "@MOUNTHOSTSTORE@"
         "@HOSTSTOREPATH@"
         "@QEMU@"
@@ -109,7 +115,8 @@ let
         (toString config.cores)
         (if config.autoUpdateFiles then "rw" else "overlay")
         config.apiKeyVariable
-        (if config.shareHostConfig then "1" else "0")
+        (if config.shareClaudeConfig then "1" else "0")
+        (if config.shareGitConfig then "1" else "0")
         (if config.mountHostNixStore then "1" else "0")
         (builtins.storeDir)
         qemuBin

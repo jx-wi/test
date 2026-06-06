@@ -28,12 +28,18 @@ These are the whole point of the project. Treat any change that weakens one as a
   remote command line).
 - **Host key is pinned.** Ephemeral ed25519 keys per run, `StrictHostKeyChecking=yes`.
   Never disable host-key checking to "make it work."
-- **`shareHostConfig` never leaks the OAuth credential.** `~/.claude/.credentials.json`
+- **`shareClaudeConfig` never leaks the OAuth credential.** `~/.claude/.credentials.json`
   must ride the **read-only 9p mount** only — never copied into the scratch/seed dir. Only
   the non-secret `~/.claude.json` is staged through the seed. The config-deref staging loop
   selects `find -type l` and skips `.credentials.json` by name; keep both guards. Verify by
   running the staging loop standalone and grepping the seed dir for the credential — expect
   zero hits.
+- **`shareGitConfig` stages only sanitized, non-secret git config.** The wrapper resolves the
+  **global** git config host-side and writes `seed/gitconfig` only after dropping every value
+  containing `/nix/store/` (host-only tool paths that would dangle) and **all `credential.*`
+  entries** (no host credential — `~/.ssh`, `gh` token — ever crosses), force-disabling commit/
+  tag signing, and staging `core.excludesfile` by *content*. Keep all four guards. Verify by
+  grepping the seed for any `/nix/store` path or `credential` key — expect zero hits.
 - **No persistent disk.** Root is tmpfs; the store is a read-only image. Nothing the agent
   does survives exit except host-project edits while `autoUpdateFiles=true`.
 - **`autoUpdateFiles=false` means genuinely read-only.** The host tree is the 9p **lower**;
@@ -42,10 +48,11 @@ These are the whole point of the project. Treat any change that weakens one as a
 
 ## Deliberate defaults — do not reverse
 
-- **Native mirroring is the default.** `autoUpdateFiles=true` (live host edits) and
-  `shareHostConfig=true` (reuse host `~/.claude`) make ccvm behave like native `claude`.
-  Isolation (read-only project, no config) is the **opt-in**. Do not re-propose
-  "secure by default" — that was the original spec and was deliberately reversed.
+- **Native mirroring is the default.** `autoUpdateFiles=true` (live host edits),
+  `shareClaudeConfig=true` (reuse host `~/.claude`), and `shareGitConfig=true` (commit as you,
+  with your aliases/ignores) make ccvm behave like native `claude`. Isolation (read-only
+  project, no config) is the **opt-in**. Do not re-propose "secure by default" — that was the
+  original spec and was deliberately reversed.
 - **Transparent passthrough.** The wrapper injects **no** flags. Everything after `ccvm`
   is forwarded to `claude` verbatim, including `--dangerously-skip-permissions` (opt-in by
   the user, never auto-added). The *only* args the wrapper consumes (and does **not**
@@ -69,7 +76,7 @@ These are the whole point of the project. Treat any change that weakens one as a
   }).wrapper
   ```
 
-  Boot it under `tcg`/`q35`, grep the output. This is exactly how `shareHostConfig` and
+  Boot it under `tcg`/`q35`, grep the output. This is exactly how `shareClaudeConfig` and
   `autoUpdateFiles` were verified end-to-end — much faster than booting the real agent.
 - `nix flake check` should pass. It builds the guest image, shellchecks the wrapper, and
   runs `tests/host.sh` (the `checks.<sys>.host` derivation) — host-side secret hygiene,
@@ -95,11 +102,11 @@ These are the whole point of the project. Treat any change that weakens one as a
   `authored-by`, bare `Claude`, no model name. This intentionally differs from the Claude
   Code CLI default; use *this* form.
 - **Config flows through `@TOKENS@`.** Scalars are baked at build time in `mkccvm.nix`
-  (`@MODE@` = `rw`/`overlay`, `@SHARECONFIG@` = `1`/`0`, etc.). Values only known at launch
+  (`@MODE@` = `rw`/`overlay`, `@SHARECLAUDE@` = `1`/`0`, etc.). Values only known at launch
   — the workspace 9p share and SSH port — are **not** baked; the wrapper builds those QEMU
   args at runtime (the microvm.nix "runtime-share trap", design §3.8).
 - **Runtime override pattern:** a `CCVM_*` env var overrides the baked default for one run
-  (`CCVM_AUTOUPDATE`, `CCVM_SHARE_CONFIG`, `CCVM_MLOCK`); an explicit `ccvm` flag wins over
+  (`CCVM_AUTOUPDATE`, `CCVM_SHARE_CLAUDE_CONFIG`, `CCVM_MLOCK`); an explicit `ccvm` flag wins over
   the env var.
 - **Forwarded argv is NUL-separated** on the wire (`claude-args` in the seed, read with
   `mapfile -d ""`); spaces/quotes/globs survive intact. Never rebuild the argv by

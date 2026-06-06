@@ -74,9 +74,9 @@ run() {
 }
 
 # ===========================================================================
-# 1. shareHostConfig staging: secret out, non-secret in.
+# 1. shareClaudeConfig staging: secret out, non-secret in.
 # ===========================================================================
-SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CONFIG=1 run)/seed"
+SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=1 run)/seed"
 
 if [[ -z "$(grep -rl "$CRED_MARKER" "$SEED" 2>/dev/null)" ]]; then
   ok "top-level OAuth credential never reaches the seed"
@@ -105,13 +105,13 @@ fi
 
 [[ -f "$SEED/claude-json" ]] && ok "non-secret ~/.claude.json staged" ||
   no "~/.claude.json not staged"
-[[ "$(cat "$SEED/share-config" 2>/dev/null)" == 1 ]] && ok "share-config flag written" ||
-  no "share-config flag missing"
+[[ "$(cat "$SEED/share-claude-config" 2>/dev/null)" == 1 ]] && ok "share-claude-config flag written" ||
+  no "share-claude-config flag missing"
 
 # ===========================================================================
 # 2. The API key never reaches the seed (it rides SendEnv over SSH only).
 # ===========================================================================
-SEED="$(HOME="$FAKE_HOME" ANTHROPIC_API_KEY="$API_KEY" CCVM_SHARE_CONFIG=0 run)/seed"
+SEED="$(HOME="$FAKE_HOME" ANTHROPIC_API_KEY="$API_KEY" CCVM_SHARE_CLAUDE_CONFIG=0 run)/seed"
 if [[ -z "$(grep -rl "$API_KEY" "$SEED" 2>/dev/null)" ]]; then
   ok "ANTHROPIC_API_KEY never written to the seed"
 else
@@ -122,7 +122,7 @@ fi
 # 3. Verbatim argv: spaces, quotes and globs survive NUL-separated round-trip.
 # ===========================================================================
 declare -a EXPECT=(--model sonnet 'two words' 'a"b' '*' '--' '-x')
-SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CONFIG=0 run "${EXPECT[@]}")/seed"
+SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 run "${EXPECT[@]}")/seed"
 declare -a GOT=()
 mapfile -t -d "" GOT <"$SEED/claude-args"
 if [[ "${GOT[*]@Q}" == "${EXPECT[*]@Q}" ]]; then
@@ -134,7 +134,7 @@ fi
 # ===========================================================================
 # 4. ccvm-only flags are consumed (not forwarded) and select the mode.
 # ===========================================================================
-SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CONFIG=0 run --no-auto-update-files --model x)/seed"
+SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 run --no-auto-update-files --model x)/seed"
 [[ "$(cat "$SEED/mode")" == overlay ]] && ok "--no-auto-update-files selects overlay mode" ||
   no "mode not overlay (got $(cat "$SEED/mode"))"
 declare -a EXPECT_FWD=(--model x)
@@ -145,7 +145,7 @@ else
   no "ccvm flag leaked into claude argv: ${GOT[*]@Q}"
 fi
 
-SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CONFIG=0 run)/seed"
+SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 run)/seed"
 [[ "$(cat "$SEED/mode")" == rw ]] && ok "default mode is rw (native mirroring)" ||
   no "default mode not rw (got $(cat "$SEED/mode"))"
 
@@ -160,12 +160,12 @@ SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CONFIG=0 run)/seed"
 # 5. CCVM_MEMORY override: a positive integer is accepted, anything else rejected
 #    before boot (so a typo can't silently fall back to the baked default).
 # ===========================================================================
-if HOME="$FAKE_HOME" CCVM_SHARE_CONFIG=0 CCVM_MEMORY=16384 run >/dev/null 2>&1; then
+if HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 CCVM_MEMORY=16384 run >/dev/null 2>&1; then
   ok "CCVM_MEMORY accepts a positive integer"
 else
   no "CCVM_MEMORY=16384 was rejected"
 fi
-if HOME="$FAKE_HOME" CCVM_SHARE_CONFIG=0 CCVM_MEMORY=lots run >/dev/null 2>&1; then
+if HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 CCVM_MEMORY=lots run >/dev/null 2>&1; then
   no "CCVM_MEMORY=lots was not rejected"
 else
   ok "CCVM_MEMORY rejects a non-integer"
@@ -175,7 +175,7 @@ fi
 # 6. Host uid/gid are staged into the seed (the guest remaps its agent user to
 #    them so 9p passthrough gives correct workspace ownership for any host uid).
 # ===========================================================================
-SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CONFIG=0 run)/seed"
+SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 run)/seed"
 if [[ "$(cat "$SEED/host-uid" 2>/dev/null)" == "$(id -u)" ]]; then
   ok "host uid staged into the seed"
 else
@@ -197,6 +197,74 @@ if grep -q 'SetEnv' "$CCVM"; then
 else
   ok "wrapper never uses SetEnv"
 fi
+
+# ===========================================================================
+# 8. shareGitConfig staging: identity/aliases/ignores carried, but host-only
+#    /nix/store tool paths, credentials and signing are sanitized out.
+# ===========================================================================
+# A home-manager-style global git config: real personalization mixed with absolute
+# /nix/store paths (editor/pager/gh credential helper) that don't exist in the guest, a
+# global ignore file, and signing turned on (whose key the VM deliberately never gets).
+GIT_HOME="$WORK/githome"
+mkdir -p "$GIT_HOME"
+GITIGNORE_SRC="$WORK/fixture-gitignore"
+printf '%s\n' 'fixture-ignored-marker' >"$GITIGNORE_SRC"
+cat >"$GIT_HOME/.gitconfig" <<EOF
+[user]
+	name = Fixture Tester
+	email = fixture@example.com
+[init]
+	defaultBranch = main
+[alias]
+	co = checkout
+[pull]
+	rebase = true
+[credential "https://github.com"]
+	helper = /nix/store/deadbeef-gh/bin/gh auth git-credential
+[core]
+	pager = /nix/store/deadbeef-delta/bin/delta
+	editor = nvim
+	excludesfile = $GITIGNORE_SRC
+[commit]
+	gpgsign = true
+EOF
+
+# Isolate from any inherited XDG config so only this fixture is the "global" git config.
+SEED="$(HOME="$GIT_HOME" XDG_CONFIG_HOME="$GIT_HOME/xdg" CCVM_SHARE_CLAUDE_CONFIG=0 run)/seed"
+GC="$SEED/gitconfig"
+
+[[ -f "$GC" ]] && ok "git: sanitized config staged into the seed" ||
+  no "git: no gitconfig staged"
+grep -q 'Fixture Tester' "$GC" 2>/dev/null && ok "git: user identity carried into the VM" ||
+  no "git: user identity missing from staged config"
+grep -q 'checkout' "$GC" 2>/dev/null && ok "git: aliases carried into the VM" ||
+  no "git: alias missing from staged config"
+if grep -q '/nix/store' "$GC" 2>/dev/null; then
+  no "git: a /nix/store tool path LEAKED into the staged config (would dangle in the guest)"
+else
+  ok "git: host-only /nix/store tool paths stripped"
+fi
+if grep -qi 'helper' "$GC" 2>/dev/null; then
+  no "git: credential.* helper LEAKED into the staged config"
+else
+  ok "git: credential helpers stripped (no host credentials cross the boundary)"
+fi
+if grep -q 'gpgsign = false' "$GC" 2>/dev/null && ! grep -q 'gpgsign = true' "$GC" 2>/dev/null; then
+  ok "git: commit/tag signing force-disabled (signing key never carried)"
+else
+  no "git: signing not disabled (gpgsign=true would break in-VM commits)"
+fi
+if [[ -f "$SEED/gitignore" ]] && grep -q 'fixture-ignored-marker' "$SEED/gitignore"; then
+  ok "git: global ignore content staged to the guest's default ignore path"
+else
+  no "git: global excludesfile content not staged"
+fi
+
+# Opt out: CCVM_SHARE_GIT_CONFIG=0 must stage nothing at all.
+SEED="$(HOME="$GIT_HOME" XDG_CONFIG_HOME="$GIT_HOME/xdg" CCVM_SHARE_CLAUDE_CONFIG=0 CCVM_SHARE_GIT_CONFIG=0 run)/seed"
+[[ ! -e "$SEED/gitconfig" && ! -e "$SEED/gitignore" ]] &&
+  ok "git: CCVM_SHARE_GIT_CONFIG=0 stages no git config" ||
+  no "git: opt-out still staged a git config/ignore"
 
 # ---------------------------------------------------------------------------
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"

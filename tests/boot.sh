@@ -19,11 +19,33 @@ cd "$(dirname "$0")/.."
 export CCVM_ACCEL="${CCVM_ACCEL:-tcg}"
 export CCVM_MACHINE="${CCVM_MACHINE:-q35}"
 # Don't drag the host's real ~/.claude into the boot test; we assert on files, not config.
-export CCVM_SHARE_CONFIG="${CCVM_SHARE_CONFIG:-0}"
+export CCVM_SHARE_CLAUDE_CONFIG="${CCVM_SHARE_CLAUDE_CONFIG:-0}"
 
 echo "building stub-claude ccvm wrappers (builds the guest closure; first run is slow)…" >&2
 WRAP="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix open)/bin/ccvm"
 WRAP_EGRESS="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix egress)/bin/ccvm"
+
+# Deterministic git-config fixture so the shareGitConfig assertions don't depend on the
+# runner's real ~/.gitconfig. Point HOME here for the wrapper runs (set AFTER `nix build`, so
+# nix still uses the real ~/.config/nix). With CCVM_SHARE_CLAUDE_CONFIG=0 nothing else reads HOME, so
+# this only affects the git passthrough under test. The fixture mixes real identity with
+# host-only /nix/store tool paths + signing that the wrapper must sanitize out.
+FIXTURE_HOME="$(mktemp -d)"
+trap 'rm -rf "$FIXTURE_HOME"' EXIT
+printf '%s\n' 'boot-fixture-ignored' >"$FIXTURE_HOME/.gitignore-global"
+cat >"$FIXTURE_HOME/.gitconfig" <<EOF
+[user]
+	name = BootTester
+	email = boot@example.com
+[credential "https://github.com"]
+	helper = /nix/store/deadbeef-gh/bin/gh auth git-credential
+[core]
+	pager = /nix/store/deadbeef-delta/bin/delta
+	excludesfile = $FIXTURE_HOME/.gitignore-global
+[commit]
+	gpgsign = true
+EOF
+export HOME="$FIXTURE_HOME"
 
 PASS=0
 FAIL=0
@@ -79,6 +101,21 @@ if [ -f "$PROJ_RW/ccvm-boot-write" ]; then
     ok "rw mode: host file owned by the host user (correct ownership)" ||
     no "rw mode: host file owned by uid $(stat -c %u "$PROJ_RW/ccvm-boot-write"), want $(id -u)"
 fi
+# shareGitConfig: the sanitized host git identity reached the guest, with the host-only
+# /nix/store tool paths stripped and signing disabled (so in-VM `git commit` works as you).
+grep -qa '^GIT:config-present$' <<<"$OUT" &&
+  ok "git: sanitized config reached the guest" || no "git: no config in the guest"
+grep -qa '^GITNAME:BootTester$' <<<"$OUT" &&
+  ok "git: host identity carried into the guest" ||
+  no "git: identity not carried: $(grep -a '^GITNAME:' <<<"$OUT")"
+grep -qa '^GIT:sanitized$' <<<"$OUT" &&
+  ok "git: host-only /nix/store tool paths stripped in the guest" ||
+  no "git: a /nix/store path survived into the guest config"
+grep -qa '^GITSIGN:false$' <<<"$OUT" &&
+  ok "git: signing force-disabled in the guest (commits won't fail)" ||
+  no "git: signing not disabled: $(grep -a '^GITSIGN:' <<<"$OUT")"
+grep -qa '^GIT:ignore-present$' <<<"$OUT" &&
+  ok "git: global ignore staged to the guest's default path" || no "git: global ignore missing"
 rm -rf "$PROJ_RW"
 
 # ---- overlay (--no-auto-update-files): the write stays in the VM -----------
