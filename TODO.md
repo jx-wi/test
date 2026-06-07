@@ -107,9 +107,13 @@ rename so `nixInVm` disappears internally too; (15) actually implement `useHostS
 
 ---
 
-## 🟡 #14 Finish the rename: internal `nixInVm` → `nix.enable` everywhere — DONE on working tree, KVM-verify pending
+## ✅ #14 Finish the rename: internal `nixInVm` → `nix.enable` everywhere — DONE & KVM-VERIFIED 2026-06-07 (committed e543764)
 
-**Status (2026-06-07):** implemented on the working tree (NOT yet committed pending the note below).
+**Nix+KVM verification (2026-06-07):** `nix flake check` clean (only the pre-existing cosmetic
+`homeManagerModules`/`ccvmParts`/aarch64 warnings) + `bash tests/boot.sh` **31/31**, now printing the
+`nix.enable:` / `nix.enable+disk:` labels. Pure rename confirmed — no behavior change.
+
+**Status (2026-06-07):** implemented + committed (e543764).
 Took the **deep-merge route**, but with a safer merge than the TODO originally recommended: instead of
 `lib.recursiveUpdate` (which recurses into *any* two attrsets — and `package` defaults to a derivation,
 i.e. an attrset, so it would silently deep-merge two derivations into a broken Frankenstein), `lib/mkccvm.nix`
