@@ -223,12 +223,12 @@ grep -qa '^SCRATCH:writable$' <<<"$OUT" &&
 rm -rf "$PROJ_ND" "$ND_TMP"
 
 # ---- nix.useHostStoreAsCache: host /nix/store mounted ro as a build cache ----
-# The wrapper attaches the host's /nix/store as a READ-ONLY 9p share + a staged `dump-db` reginfo;
-# the guest mounts the store at the chroot root /nix/.host-store, loads the reginfo into a writable
-# DB there, and registers `local?root=/nix/.host-store` as a substituter. Assert: the host store is
+# The wrapper attaches the host's /nix/store AND nix DB as READ-ONLY 9p shares; the guest mounts the
+# store ro at the chroot root /nix/.host-store, copies the host db.sqlite into a ccvm-owned writable
+# dir there, and registers `local?root=/nix/.host-store` as a substituter. Assert: the host store is
 # mounted, it is read-only (the agent must not be able to mutate the host's real store), the
-# substituter is in nix.conf, AND a host path is reported valid via the chroot store (reginfo
-# loaded → nix will substitute it rather than rebuild).
+# substituter is in nix.conf, AND a host path is reported valid via the chroot store (DB copy works →
+# nix will substitute it rather than rebuild).
 PROJ_HC="$(mktemp -d)"
 OUT="$(run_capture "$WRAP_NIXCACHE" "$PROJ_HC")"
 grep -qa '^HOSTCACHE:mounted$' <<<"$OUT" &&
@@ -241,8 +241,8 @@ grep -qa '^HOSTCACHE:configured$' <<<"$OUT" &&
   ok "hostStoreCache: nix.conf carries the local?root=/nix/.host-store substituter" ||
   no "hostStoreCache: substituter not in nix.conf: $(grep -a '^HOSTCACHE:' <<<"$OUT")"
 grep -qa '^HOSTCACHE:db-valid$' <<<"$OUT" &&
-  ok "hostStoreCache: reginfo loaded — a host store path is VALID via the substituter (will substitute)" ||
-  no "hostStoreCache: host path not valid in the chroot store (reginfo load failed?): $(grep -a '^HOSTCACHE:' <<<"$OUT")"
+  ok "hostStoreCache: DB copy works — a host store path is VALID via the substituter (will substitute)" ||
+  no "hostStoreCache: host path not valid in the chroot store (DB copy failed?): $(grep -a '^HOSTCACHE:' <<<"$OUT")"
 rm -rf "$PROJ_HC"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"

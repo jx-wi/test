@@ -482,43 +482,50 @@ default initrd carries only squashfs/overlay/9p). Verified by `nix flake check`,
 disk-backed upper.
 
 **Remaining follow-ons (not blocking — `nix develop` with a disk works today):**
-- **L2 — `nix.useHostStoreAsCache` (host store as a build substituter) — IMPLEMENTED (reginfo),
-  pending final KVM boot-test (2026-06-07).** The chosen mechanism is a read-only **substituter** (host store as a binary cache:
-  nix copies the needed paths into the VM's own store and registers them as valid), *not* mounting the
-  host store as the overlay lower. The overlay-lower approach was **considered and rejected**: a bare
-  FS mount gives path *presence* but not nix **DB** validity, so nix won't trust those paths for builds
-  without also loading the host store DB (`reginfo`) — and even done right it exposes the *entire* host
-  store to the agent (weaker isolation) for only a marginal copy-avoidance. The substituter is the
-  standard, DB-consistent, better-isolated mechanism (it surfaces only the paths a build actually
-  needs). It still reads the host store over a ro 9p mount internally, just as a cache source rather
-  than as the live store.
+- **L2 — `nix.useHostStoreAsCache` (host store as a build substituter) — IMPLEMENTED (DB copy),
+  pending final KVM boot-test (2026-06-07).** The chosen mechanism is a read-only **substituter** (host
+  store as a binary cache: nix copies the needed paths into the VM's own store and registers them as
+  valid), *not* mounting the host store as the guest's `/nix/store` overlay lower. That overlay-lower
+  approach was **considered and rejected**: a bare FS mount gives path *presence* but not nix **DB**
+  validity, and it exposes the *entire* host store as the live store (weaker isolation). The
+  substituter is the standard, DB-consistent, better-isolated mechanism (nix surfaces only the paths a
+  build actually needs). It reads the host store over a ro 9p mount internally, as a cache source.
 
-  **Mechanism (implemented).** The wrapper attaches the host `/nix/store` as a **read-only** 9p share
-  (`readonly=on`, `mount_tag=ccvm-hoststore`), gated on the baked `@HOSTSTORECACHE@` flag (from
-  `nix.useHostStoreAsCache`; per-run `CCVM_NIX_HOST_CACHE`) and a `nix-host-store-cache` seed marker,
-  and also stages a `nix-store --dump-db` **reginfo** (`nix-store-db`). The guest mounts the store ro
-  at the chroot-store root `/nix/.host-store` (so `/nix/.host-store/nix/store` == the host store),
-  loads the reginfo into a **writable** DB at `/nix/.host-store/nix/var/nix/db`, and `nix.settings`
-  registers `extra-substituters = [ "local?root=/nix/.host-store" ]` (+ `require-sigs = false`, host
-  paths being unsigned). A `local?root=…` chroot store keeps its logical storeDir `/nix/store`, so the
-  paths match the guest store and substitute directly.
+  **Mechanism (implemented).** The wrapper attaches the host `/nix/store` **and** the host nix DB
+  `/nix/var/nix/db` as **read-only** 9p shares (`readonly=on`, `mount_tag=ccvm-hoststore` /
+  `ccvm-hostnixdb`), gated on the baked `@HOSTSTORECACHE@` flag (from `nix.useHostStoreAsCache`; per-run
+  `CCVM_NIX_HOST_CACHE`) and a `nix-host-store-cache` seed marker. The guest mounts the store ro at the
+  chroot-store root `/nix/.host-store` (so `/nix/.host-store/nix/store` == the host store) and **copies**
+  the host DB's `db.sqlite` into a `ccvm`-owned writable dir at `/nix/.host-store/nix/var/nix/db`;
+  `nix.settings` registers `extra-substituters = [ "local?root=/nix/.host-store" ]` (+ `require-sigs =
+  false`, host paths being unsigned). A `local?root=…` chroot store keeps its logical storeDir
+  `/nix/store`, so paths match the guest store and substitute directly.
 
-  **Why a staged reginfo, not a ro DB mount (spike result, 2026-06-07).** A spike on the Nix box
-  settled the open fork. Mounting the host's live `/nix/var/nix/db` **read-only** does NOT work: a
-  chroot store must *write* its lock file to open the DB, so it fails with `opening lock file
-  "…/big-lock": Permission denied`. Dumping the DB (`nix-store --dump-db`, ~19 MB / ~2 s on a typical
-  dev store) and `--load-db`-ing it into a writable copy **does** work (`nix path-info` then reports
-  the ro-mounted paths valid, and `nix-store --dump` can read their NARs — i.e. they substitute). So
-  only the store **files** ride ro 9p; the DB is a normal writable sqlite on the guest's tmpfs,
-  sidestepping both the lock-file problem and any sqlite-over-9p concern. Cost: the ~19 MB dump staged
-  per launch (acceptable for an opt-in; could later be scoped to a closure if it grows).
+  **Why a db.sqlite copy, not a ro mount / overlay / reginfo load (spike results, 2026-06-07).** The
+  consumer of the substituter is the **agent** (the non-root `ccvm` user), and nix opens a local store's
+  DB **read-write** even just to query it (it takes the `big-lock` lock file and uses sqlite WAL). Four
+  approaches were spiked/reasoned: **(a)** ro-mount the host DB → FAILS even as root: can't create
+  `big-lock` (`opening lock file ".../big-lock": Permission denied`). **(b)** `nix-store --dump-db` +
+  `--load-db` into a writable copy → works, but the host DB is large (217 MB / 24k paths on the dev box)
+  and the `load-db` *replay* is CPU-bound and slow under TCG — in the `Before=sshd` path it **blocked
+  sshd and timed out the boot** (confirmed: the guest reached the login prompt but sshd waited on the
+  blocked seed service). **(c)** overlay the ro host DB under a tmpfs upper → works *as root* (lazy
+  `db.sqlite` copy-up into the upper), but the overlay dir inherits the lower's `root:root` perms and
+  the copy-up is root-owned, so the **non-root agent can't open it RW** — same failure as (a) for the
+  real consumer. **(d, chosen)** copy `db.sqlite` (committed state) into a `ccvm`-owned writable tmpfs
+  dir: a flat ~tens-of-MB file copy (fast bulk I/O, not a replay), after which the agent opens a normal
+  writable local DB. Only the small `nix/var` tree is chowned to ccvm; the store **files** stay ro 9p
+  (world-readable; the agent only reads them). Best-effort: only `db.sqlite` is copied (its last
+  checkpoint), so a path the host left in the `-wal`, or adds mid-session, may miss and be rebuilt —
+  fine for a cache (the guest's own store DB is authoritative).
 
   **Tests.** `host.sh` asserts the marker + that nothing secret is staged; `boot.sh` (the `nixCache`
   posture) asserts the host store is mounted **read-only**, the substituter is in `nix.conf`, and a
-  host store path is reported **valid** via the chroot store (`HOSTCACHE:db-valid` — proves the
-  reginfo loaded and nix will substitute rather than rebuild). **Still to confirm on KVM:** the
-  `nixCache` boot posture green end-to-end (the guest-side reginfo `--load-db` is the one part not
-  exercisable host-side).
+  host store path is reported **valid** via the chroot store (`HOSTCACHE:db-valid` — proves the DB copy
+  works and nix will substitute rather than rebuild). **Still to confirm on KVM:** the `nixCache` boot
+  posture green end-to-end (the guest-side DB copy/chown is the one part not exercisable host-side),
+  and that the `db.sqlite` copy in the seed service is fast enough to not delay boot (a flat copy,
+  unlike (b)'s replay — but verify).
 
 **Tests as established:** `host.sh` host-side staging in `nix flake check`; `boot.nix` postures
 (`scratch` for the disk, `nix` for in-VM nix) + `stub-claude.sh` reports (`SCRATCH:*`,

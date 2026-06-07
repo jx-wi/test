@@ -525,33 +525,29 @@ if [[ $VMDISKSIZE != 0 ]]; then
 fi
 
 # ---- host /nix/store as a read-only build cache (opt-in: nix.useHostStoreAsCache) ----
-# Expose the host's /nix/store to the guest as a READ-ONLY 9p share so in-VM nix can reuse paths the
-# host has already realised (a build substituter / binary cache) instead of rebuilding them. The
-# guest mounts it at a SIDE path (/nix/.host-store) — NEVER as the live /nix/store — and registers it
-# as a substituter (see guest/default.nix); the guest's own boot store is always the squashfs (§3.4).
+# Expose the host's /nix/store to the guest as READ-ONLY 9p shares so in-VM nix can reuse paths the
+# host has already realised (a build substituter) instead of rebuilding them. The guest mounts the
+# store at a SIDE path (/nix/.host-store) — NEVER as the live /nix/store — and registers it as a
+# substituter (see guest/default.nix); the guest's own boot store is always the squashfs (§3.4).
 # Strictly read-only (readonly=on): the in-VM agent must never be able to mutate the host's real
 # store — that would break the trust boundary. Store paths are content-addressed PUBLIC packages, so
-# ro exposure is the accepted cost of the acceleration (design §3.11 L2); nothing secret rides this
-# share — no keys, no DB write access, no /nix/var beyond what a later reginfo step may add. Only
-# meaningful with nix.enable (no in-VM nix otherwise); harmless if attached without it.
+# ro exposure is the accepted cost; nothing secret rides these shares — no keys, no write access.
+# We share TWO things: the store files, and the nix path-validity DB (/nix/var/nix/db). The DB is
+# needed so nix trusts the host paths as valid; the guest overlays it (ro lower + tmpfs upper) so it
+# can open the DB without a slow dump+load-db (design §3.11 L2). Only meaningful with nix.enable.
 HOSTSTORE_ARGS=()
 if [[ $HOSTSTORECACHE == 1 ]]; then
   if [[ -d /nix/store ]]; then
     HOSTSTORE_ARGS+=(-fsdev "local,id=hoststore,path=/nix/store,security_model=none,readonly=on")
     HOSTSTORE_ARGS+=(-device "virtio-9p-$BUS,fsdev=hoststore,mount_tag=ccvm-hoststore")
     printf '1' >"$SEED/nix-host-store-cache"
-    # Stage the host store's path-validity DB so the guest can register the ro-mounted paths as
-    # valid in a chroot store and actually substitute them. We export a DUMP rather than sharing
-    # the live DB because a chroot store must WRITE a lock file to open its DB, so a read-only DB
-    # mount fails ("opening lock file …: Permission denied") — the guest loads this dump into a
-    # writable copy instead. Non-secret: store-path registration metadata only (hashes, refs,
-    # sizes — store paths are public). Best-effort: without nix-store on the host the cache still
-    # mounts but nix won't trust the paths (no substitution), so warn rather than fail the launch.
-    if command -v nix-store >/dev/null 2>&1; then
-      nix-store --dump-db >"$SEED/nix-store-db" 2>/dev/null ||
-        { warn "could not export the host nix DB (reginfo) — host-store cache mounted but paths won't substitute"; rm -f "$SEED/nix-store-db"; }
+    # The DB is what makes paths substitutable. Share it ro too when present; if the host has no nix
+    # DB (e.g. a store image with no daemon DB) the cache still mounts but paths won't substitute.
+    if [[ -d /nix/var/nix/db ]]; then
+      HOSTSTORE_ARGS+=(-fsdev "local,id=hostnixdb,path=/nix/var/nix/db,security_model=none,readonly=on")
+      HOSTSTORE_ARGS+=(-device "virtio-9p-$BUS,fsdev=hostnixdb,mount_tag=ccvm-hostnixdb")
     else
-      warn "nix-store not found on the host — host-store cache mounted but paths won't substitute (no validity DB)"
+      warn "host has /nix/store but no /nix/var/nix/db — host-store cache mounted but paths won't substitute"
     fi
   else
     warn "nix.useHostStoreAsCache is on but the host has no /nix/store — skipping the host-store cache"

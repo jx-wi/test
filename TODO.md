@@ -205,8 +205,11 @@ hits (only historical TODO mentions).
 
 ## 🟡 #15 Implement `useHostStoreAsCache` — host store as a read-only build substituter (design §3.11 L2)
 
-**Status (2026-06-07): host-side plumbing + guest mount/substituter DONE & host-verified; the DB-validity
-crux remains (needs a spike on the Nix+KVM box).** Working tree (NOT committed unless noted below):
+**Status (2026-06-07): DB mechanism settled (copy `db.sqlite`); fully implemented on the working tree +
+host-verified (host.sh 49/49); needs a final KVM `tests/boot.sh nixCache` run (35/35) to confirm the
+guest-side DB copy + that it doesn't slow boot.** The store-mount/substituter half was already
+KVM-verified 34/34; the DB-copy half is the new, KVM-unverified piece. See "THE DB CRUX" below for the
+3-round spike/boot saga (ro-mount ✗, load-db blocks boot ✗, overlay needs root ✗, copy ✓).
 
 **Done & verified here (host-side, 49/49 host.sh):**
 - Wrapper (`wrapper/ccvm.sh`): baked `HOSTSTORECACHE="@HOSTSTORECACHE@"` + `CCVM_NIX_HOST_CACHE` per-run
@@ -232,34 +235,46 @@ nix.conf):**
 - Docs: README (option/env/In-VM-nix), design §3.11 L2 (flipped to "experimental, in progress" with the
   done/remaining split), CLAUDE.md deliberate-defaults bullet, home-manager option description.
 
-**THE DB CRUX — RESOLVED via spike (2026-06-07): option (b) reginfo.** Spike on the Nix box settled it:
-- **(a) ro-mount the host `/nix/var/nix/db`** → **FAILS**: a chroot store must WRITE its lock file to open
-  the DB (`error: opening lock file ".../big-lock": Permission denied`). A read-only DB mount is a dead end.
-- **(b) stage `nix-store --dump-db` reginfo → `--load-db` into a writable DB** → **WORKS**: `nix path-info
-  --store local?root=$HR <hostpath>` reports valid and `nix-store --dump` reads the NAR (i.e. it
-  substitutes). Dump is ~19 MB / ~2 s on a typical dev store. `local?root=…` confirmed to keep logical
-  storeDir `/nix/store` (path-info returned the real `/nix/store/…` path), so guest paths match.
+**THE DB CRUX — settled across THREE spike/boot rounds (2026-06-07).** The host DB is big (217 MB / 24k
+paths on the dev box) and nix opens a local store's DB **read-write even to query it** (it takes the
+`big-lock` lock file + uses sqlite WAL). The consumer is the **agent (non-root `ccvm`)**. Four approaches:
+- **(a) ro-mount the host DB** → FAILS even as root: can't create `big-lock` (`opening lock file
+  ".../big-lock": Permission denied`).
+- **(b) `nix-store --dump-db` → `--load-db` into a writable DB** → substitutes correctly (spike), BUT the
+  `load-db` *replay* is CPU-bound and slow under TCG; placed in the `Before=sshd` seed service it **blocked
+  sshd → boot timed out** (KVM boot test: guest reached the login prompt, but sshd waited on the blocked
+  seed service; `wait_for_boot` failed). Dead for the boot path.
+- **(c) overlay the ro host DB (tmpfs upper)** → works **as root** (lazy `db.sqlite` copy-up, ~54 MB), but
+  the overlay dir inherits the lower's `root:root` perms and the copy-up is root-owned, so the **non-root
+  agent can't open it RW** — same `big-lock` failure as (a) for the real consumer. (Spike confirmed: works
+  under `sudo`, fails as the user.)
+- **(d, CHOSEN) copy `db.sqlite` into a `ccvm`-owned writable tmpfs dir** → the agent then opens a normal
+  writable local DB. Flat ~tens-of-MB file copy (fast bulk I/O, not a CPU replay). `local?root=…` confirmed
+  to keep logical storeDir `/nix/store` so guest paths match.
 
-**Implemented (option b) on the working tree:**
-- Wrapper: in the host-store block, after the marker, `command -v nix-store && nix-store --dump-db
-  >seed/nix-store-db` (best-effort; warns if no host nix-store — store still mounts but won't substitute).
-- `guest/launcher.nix`: after mounting the ro store at `/nix/.host-store/nix/store`, `mkdir
-  /nix/.host-store/nix/var/nix/db` (tmpfs, writable) + `nix-store --store local?root=/nix/.host-store
-  --load-db <seed/nix-store-db`. Added `config.nix.package` to the seed service's runtimeInputs **gated on
-  cfg.nix.enable** (nix is already in the closure then → ~no cost; default stays lean).
-- `guest/default.nix`: substituter comment updated (DB now loaded from reginfo).
-- Tests: `stub-claude.sh` adds `HOSTCACHE:db-valid` (queries `nix path-info --store local?root=… <a path
-  from the ro mount>`); `boot.sh` asserts it (the real "it will substitute" check). host.sh §13 unchanged
-  (3 assertions; reginfo staging is gated on host nix-store, absent here, so it stays env-independent).
-- Docs flipped to "implemented (reginfo)": README, design §3.11 L2 (with the spike result), CLAUDE.md,
-  home-manager option desc.
+**Implemented (option d) on the working tree:**
+- Wrapper: shares BOTH host `/nix/store` (`mount_tag=ccvm-hoststore`) AND `/nix/var/nix/db`
+  (`mount_tag=ccvm-hostnixdb`) as ro 9p (no `dump-db` on the host anymore); marker `nix-host-store-cache`.
+  Writes the marker whenever `/nix/store` exists; shares the DB only if `/nix/var/nix/db` exists (this dev
+  box has the store but no DB, so host.sh stays env-independent — marker yes, DB share no).
+- `guest/launcher.nix` (seed service, root): mount store ro at `/nix/.host-store/nix/store`; mount host DB
+  ro at `/run/ccvm-hostnixdb`; `cp db.sqlite` → `/nix/.host-store/nix/var/nix/db/db.sqlite`; `chown -R
+  ccvm:users /nix/.host-store/nix/var` (the small DB tree only — NOT the ro store mount). Removed the
+  earlier `nix` addition to the seed-service path (no `load-db` needed). All fail-open.
+- `guest/default.nix`: substituter `local?root=/nix/.host-store` + `require-sigs=false` (unchanged);
+  comment now says "DB copied".
+- Tests: `stub-claude.sh` `HOSTCACHE:db-valid` (queries `nix path-info --store local?root=…`); `boot.sh`
+  asserts mounted/readonly/configured/db-valid; host.sh §13 unchanged (49/49 here).
+- Docs (README, design §3.11 L2 with all four spike outcomes, CLAUDE.md, home-manager) → "DB copy".
 
-**REMAINING — final KVM confirmation only:** `nix flake check` clean + `bash tests/boot.sh` with the
-`nixCache` posture green **35/35** (31 + 4 host-cache: mounted, readonly, configured, db-valid). The
-guest-side reginfo `--load-db` (nix-store in the seed-service path, load-db as root into the chroot store,
-9p store read during path-info) is the one part not exercisable host-side — confirm `HOSTCACHE:db-valid`
-passes. Then #15 is fully done. (Optional nice-to-have after: a real `nix build` of a host-realised path
-showing a copy, not a rebuild — the human/`--shell` check.)
+**REMAINING — KVM confirmation (the part not exercisable host-side):** `nix flake check` clean + `bash
+tests/boot.sh` `nixCache` posture green **35/35** (31 + 4: mounted, readonly, configured, **db-valid**).
+Specifically confirm: (1) boot succeeds — the `db.sqlite` cp in the seed service is fast enough to not
+block sshd (it's a flat copy, unlike (b)'s replay — but VERIFY; if it's still too slow under TCG, move the
+cache setup OUT of the Before=sshd seed service into its own service + have the ForceCommand launcher wait
+for it); (2) `HOSTCACHE:db-valid` passes (the agent, as ccvm, opens the copied DB and path-info works).
+Then #15 is done. Nice-to-have: a real `--shell` `nix build` of a host-realised path showing a copy not a
+rebuild.
 
 ---
 

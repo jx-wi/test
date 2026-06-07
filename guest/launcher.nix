@@ -60,11 +60,7 @@ let
 
   seedSetup = pkgs.writeShellApplication {
     name = "ccvm-seed-setup";
-    runtimeInputs = [ pkgs.coreutils pkgs.util-linux pkgs.shadow pkgs.gnugrep pkgs.nftables pkgs.kmod pkgs.cryptsetup pkgs.e2fsprogs ]
-      # nix-store, only when in-VM nix is on, to --load-db the host-store cache reginfo (#15). nix is
-      # already in the closure when nix.enable is on, so this adds ~nothing; gated so the default
-      # (no-nix) seed service stays lean.
-      ++ lib.optionals cfg.nix.enable [ config.nix.package ];
+    runtimeInputs = [ pkgs.coreutils pkgs.util-linux pkgs.shadow pkgs.gnugrep pkgs.nftables pkgs.kmod pkgs.cryptsetup pkgs.e2fsprogs ];
     text = ''
       seed=/run/ccvm-seed
       mkdir -p "$seed"
@@ -234,21 +230,35 @@ let
       # and strictly read-only, so the agent can't mutate the host's real store. Mounted here
       # (runtime, gated on the seed marker) rather than declaratively because the share only exists
       # when the host opted in. Best-effort: a hiccup must not fail the oneshot and block sshd.
-      # The substituter also needs the host store's nix DB to know which paths are valid. A
-      # ro-mounted live DB can't be opened (a chroot store must WRITE a lock file), so the host
-      # staged a `nix-store --dump-db` reginfo into the seed; we load it into a WRITABLE DB at the
-      # chroot root (on the tmpfs root, so only the store FILES come over ro 9p). After that nix
-      # trusts the ro paths and substitutes them via the baked `local?root=…` substituter.
+      # The substituter also needs the host's nix DB to know which paths are valid — and nix opens a
+      # local store's DB READ-WRITE even just to query it (it takes the big-lock and uses sqlite WAL).
+      # The consumer here is the AGENT (the non-root ccvm user), so a ro DB mount can't be opened
+      # (lock file) and an overlay's copy-up would be root-owned (the agent couldn't trigger it). So
+      # we COPY the host DB's db.sqlite into a ccvm-owned writable dir on tmpfs: a flat ~tens-of-MB
+      # file copy (fast I/O — unlike a dump+load-db replay, which is CPU-bound and blocked boot under
+      # TCG). Only db.sqlite is copied (its committed state — a consistent-enough snapshot; anything
+      # the host left in the -wal is skipped, so such a path just misses and rebuilds). The store
+      # FILES stay ro 9p (world-readable; the agent only reads them, never writes the host store).
+      # Best-effort/fail-open throughout: any hiccup leaves the agent without the cache.
       if [ -f "$seed/nix-host-store-cache" ]; then
         if mkdir -p /nix/.host-store/nix/store \
            && mount -t 9p -o ${p9},ro ccvm-hoststore /nix/.host-store/nix/store 2>/dev/null; then
-          if [ -f "$seed/nix-store-db" ]; then
+          if mkdir -p /run/ccvm-hostnixdb \
+             && mount -t 9p -o ${p9},ro ccvm-hostnixdb /run/ccvm-hostnixdb 2>/dev/null; then
             mkdir -p /nix/.host-store/nix/var/nix/db
-            nix-store --store "local?root=/nix/.host-store" --load-db <"$seed/nix-store-db" 2>/dev/null \
-              || echo "ccvm: host-store cache: load-db failed; cache mounted but paths won't substitute" >&2
+            if cp /run/ccvm-hostnixdb/db.sqlite /nix/.host-store/nix/var/nix/db/db.sqlite 2>/dev/null; then
+              # The agent (ccvm) must own the DB tree to open db.sqlite rw + create lock files. chown
+              # only this small var tree — NOT the ro store mount (that stays root/9p, read-only).
+              chown -R ccvm:users /nix/.host-store/nix/var || true
+            else
+              echo "ccvm: host-store cache: copying the host nix DB failed; paths won't substitute" >&2
+            fi
+            umount /run/ccvm-hostnixdb 2>/dev/null || true
+          else
+            echo "ccvm: host-store cache: host DB not shared; paths won't substitute" >&2
           fi
         else
-          echo "ccvm: host-store cache: mount failed; continuing without it" >&2
+          echo "ccvm: host-store cache: store mount failed; continuing without it" >&2
         fi
       fi
 

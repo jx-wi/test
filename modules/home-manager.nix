@@ -88,14 +88,14 @@ in
           Reuse the host's /nix/store to accelerate in-VM builds by registering it as a build
           substituter (binary cache), so paths the host has already realised are copied into the
           VM's store instead of rebuilt. Only meaningful with `nix.enable = true`. Read-only by
-          construction — the host store is attached as a read-only 9p mount and registered as a
-          `local?root=…` substituter; it is never written from the VM (that would let the agent
-          mutate the host's store), so this is a cache, not a writable mount. The host's
-          path-validity DB is staged as a `nix-store --dump-db` reginfo and loaded into the VM (a
-          live host DB can't be mounted read-only), so nix trusts the paths and substitutes them.
-          Exposing the host store read-only does enlarge the host surface visible to the agent, but
-          store paths are content-addressed public packages, so the exposure is low-risk (design
-          §3.11). Per-run override: CCVM_NIX_HOST_CACHE=0|1.
+          construction — the host store and its nix DB are attached as read-only 9p mounts and
+          registered as a `local?root=…` substituter; the host `/nix/store` is never written from the
+          VM (that would let the agent mutate the host's store), so this is a cache, not a writable
+          mount. The DB's db.sqlite is copied into a writable tmpfs dir in the VM (nix opens a store
+          DB read-write even to query it, so a plain ro mount can't be used). Exposing the host store
+          read-only does enlarge the host surface visible to the agent, but store paths are
+          content-addressed public packages, so the exposure is low-risk (design §3.11). Best-effort:
+          a path the host adds mid-session may miss and be rebuilt. Per-run: CCVM_NIX_HOST_CACHE=0|1.
         '';
       };
     };
