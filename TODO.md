@@ -219,7 +219,9 @@ crux remains (needs a spike on the Nix+KVM box).** Working tree (NOT committed u
 - `host.sh` §13 (3 new assertions: default off → no marker; opt-in → marker; opt-in stages NO secret) →
   **49/49** via the dry-run recipe (recipe now substitutes `@HOSTSTORECACHE@`).
 
-**Done on the working tree, NEEDS KVM verification (guest-side — touches the closure):**
+**Guest-side plumbing — DONE & KVM-VERIFIED 2026-06-07 (`nix flake check` clean + `bash tests/boot.sh`
+34/34, incl. the 3 `hostStoreCache` assertions: host store mounted, mount is READ-ONLY, substituter in
+nix.conf):**
 - `guest/launcher.nix`: when the marker is present, mount `ccvm-hoststore` **ro** at the chroot-store root
   `/nix/.host-store/nix/store` (fail-open).
 - `guest/default.nix`: when `cfg.nix.useHostStoreAsCache`, `nix.settings` adds
