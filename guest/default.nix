@@ -33,7 +33,10 @@ let
 
     # The initrd explicitly waits only for the STORE disk (vda, a declared fileSystem); our scratch
     # disk (vdb, serial=ccvm-scratch) is undeclared, so its /dev/disk/by-id symlink may still be
-    # settling when we run. Let udev finish before probing.
+    # settling when we run. Let udev finish before probing. (udevadm is the sole reason
+    # config.systemd.package is on PATH above — there is no narrower provider in nixpkgs, and systemd
+    # is already in the initrd so it costs no extra closure. It's best-effort anyway: the find_dev
+    # retry loop below is the real safety net if the settle is unavailable or times out.)
     udevadm settle --timeout=10 2>/dev/null || true
 
     # Prefer the stable by-id symlink; fall back to scanning /sys/block/*/serial (kernel-provided,
@@ -53,7 +56,6 @@ let
       log "no vmDiskSize disk found after probe; /nix/.rw-store stays tmpfs (RAM). by-id=[$(ls /dev/disk/by-id 2>/dev/null | tr '\n' ' ')]"
       exit 0
     fi
-    log "found disk at $dev; LUKS-formatting (pbkdf2)"
 
     mkdir -p "$target"
     keyf=/run/ccvm-store-disk.key   # initrd /run = tmpfs (RAM); never on 9p, gone at power-off
@@ -62,7 +64,6 @@ let
          --pbkdf-force-iterations 1000 "$dev" "$keyf" \
        && cryptsetup open --type luks2 --key-file "$keyf" "$dev" ccvm-scratch; then
       shred -u "$keyf" 2>/dev/null || rm -f "$keyf"
-      log "LUKS open OK; mkfs.ext4 + mount over the tmpfs at $target"
       if mkfs.ext4 -q -F -E nodiscard /dev/mapper/ccvm-scratch \
          && mount /dev/mapper/ccvm-scratch "$target"; then
         # Pre-create the overlay upper/work dirs (+ a scratch subdir the post-boot service binds to

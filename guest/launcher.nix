@@ -167,15 +167,16 @@ let
 
       # Opt-in encrypted ephemeral disk pool (vmDiskSize). The host attached a raw SPARSE virtio-blk
       # disk with serial=ccvm-scratch (so it resolves at /dev/disk/by-id/virtio-ccvm-scratch
-      # regardless of /dev ordering). We LUKS-format it FRESH every boot with a key generated in
-      # GUEST RAM — the key never crosses 9p, so the host only ever sees ciphertext (same spirit
-      # as the API key, §3.7) — open it, lay an ext4, and mount it at /scratch for the agent.
-      # Wipe-on-exit is cryptographic: the key dies with guest RAM at power-off, so the on-disk
-      # image is inert the instant qemu stops, even on a crash that skips the host-side rm.
-      # FAIL-OPEN throughout: any hiccup logs and continues WITHOUT /scratch (the agent still has
-      # tmpfs) — it must never fail this oneshot and block sshd. A LUKS header needs a few MiB, so
-      # the host caps the size; we use a fast pbkdf2 (the key is already 64 random bytes, so a
-      # memory-hard KDF would only slow boot — especially under TCG — for no added security).
+      # regardless of /dev ordering). Two cases below, depending on whether the INITRD already
+      # claimed the disk for the nixInVm /nix/store overlay upper (storeDiskScript, guest/default.nix):
+      # it did (marker present) -> SHARE that pool; it didn't -> this service OWNS the disk and formats
+      # a standalone /scratch. Invariants common to both, however the disk gets opened:
+      #   * the LUKS key is generated in GUEST RAM and never crosses 9p — the host only ever sees
+      #     ciphertext (same spirit as the API key, §3.7);
+      #   * wipe-on-exit is cryptographic — the key dies with guest RAM at power-off, so the on-disk
+      #     image is inert the instant qemu stops, even on a crash that skips the host-side rm;
+      #   * FAIL-OPEN throughout — any hiccup logs and continues WITHOUT /scratch (the agent still has
+      #     tmpfs); it must never fail this oneshot and block sshd.
       if [ -f "$seed/vm-disk" ] && [ -e /run/ccvm-store-on-disk ]; then
         # nixInVm + vmDiskSize: the INITRD already LUKS-opened the disk and mounted it as the
         # /nix/store overlay upper at /nix/.rw-store (marker /run/ccvm-store-on-disk, preserved
@@ -189,8 +190,10 @@ let
           echo "ccvm: scratch: bind to the shared disk pool failed; continuing without /scratch" >&2
         fi
       elif [ -f "$seed/vm-disk" ]; then
-        # vmDiskSize WITHOUT a disk-backed store (nixInVm off, or the initrd backing failed open):
-        # this service owns the disk — LUKS-format/open/mkfs it fresh for a standalone /scratch.
+        # STANDALONE (nixInVm off, or the initrd backing failed open): this service owns the disk, so
+        # LUKS-format it FRESH every boot, open it, lay an ext4, and mount it at /scratch. A LUKS
+        # header needs a few MiB so the host caps the size; pbkdf2 keeps luksFormat fast (the key is
+        # already 64 random bytes, so a memory-hard KDF would only slow boot — especially under TCG).
         modprobe dm_mod dm_crypt 2>/dev/null || true
         dev=/dev/disk/by-id/virtio-ccvm-scratch
         for _ in $(seq 1 50); do [ -e "$dev" ] && break; sleep 0.1; done

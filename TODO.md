@@ -62,34 +62,45 @@ half-remembered context.
   `CCVM_SHARE_CLAUDE_CONFIG`, token `@SHARECLAUDE@`, seed marker `share-claude-config`). That is
   why #3 below reads as "dead `shareClaudeConfig` guest option" — it was `shareHostConfig` then.
 
-## ⏭ NEXT SESSION — nits & cleanups (low-risk polish; #10-C is DONE & KVM-VERIFIED)
+## ✅ #10-C cleanup nits — DONE & KVM-VERIFIED 2026-06-07 (pre-public list now clear)
 
 The pre-public feature work is complete: the disk-backed `nixInVm` upper (the hard initrd-LUKS
 increment) landed in `2723eef` and is **DONE & KVM-VERIFIED 2026-06-07** — see #10 "Increment C" for
 the full record (mount-stacking + fail-open, one shared encrypted pool, `nix flake check` clean +
-`tests/boot.sh` 31/31 + a real 8 GiB `nix build`). This session is **polish only** — small, optional,
-each independently committable. None block going public.
+`tests/boot.sh` 31/31 + a real 8 GiB `nix build`). This batch was **polish only** — small, optional.
+None block going public.
+
+**Status (2026-06-07):** all four cleanups DONE, verified, and committed. #4 verified here (host.sh
+46/46 via the dry-run recipe); #1–#3 (guest-closure comment/logging edits) **verified GREEN on the
+Nix+KVM box** — `nix flake check` clean (only the pre-existing cosmetic `homeManagerModules`/`ccvmParts`/
+aarch64 warnings) and `bash tests/boot.sh` **31/31** — then committed. The pre-public list is now clear
+apart from the optional, non-blocking #10 L2 / store-DB-registration / #12 persist-boot-assertion items.
 
 **Cleanup candidates (from the #10-C session — low risk, do any/all):**
-1. **Trim the initrd logging** in `guest/default.nix` `storeDiskScript`. It logs progress breadcrumbs
-   (`found disk` / `LUKS open OK` / `SUCCESS`) via `StandardError = "journal+console"`, chattier than
-   the post-boot `/scratch` path (`guest/launcher.nix`), which logs *only* fail-open reasons. Decide:
-   keep (it's the hardest path to debug — no initrd→journal handover, so console breadcrumbs earned
-   their keep during bring-up) vs. trim to fail-open reasons + one success line for consistency.
-2. **Re-flow the stale comment** in `guest/launcher.nix` (~L168–178). The "encrypted disk pool"
-   block predates the new `if [ vm-disk ] && [ /run/ccvm-store-on-disk ] … elif …` split, so it now
-   sits above the *shared-pool* branch while describing the *standalone* path. Reorder so each branch's
-   comment is local to it.
-3. **Narrow the `udevadm` dependency** in `storeDiskScript`: it pulls `config.systemd.package` into the
-   script's `makeBinPath` just for `udevadm settle`. Works (systemd's already in the initrd), but a
-   tighter reference (or dropping it if `udevadm` is otherwise on the initrd PATH) would be cleaner.
-4. **Re-run `host.sh`** via the dry-run recipe for completeness. #10-C made **no wrapper change**, so
-   it's genuinely unaffected (was 46/46), but a clean re-run closes the loop. (Verify here on the
-   no-Nix box; the guest-side cleanups 1–3 need a Nix+KVM `nix flake check` + `tests/boot.sh` pass.)
+1. ✅ **Trim the initrd logging** in `guest/default.nix` `storeDiskScript` — DONE (working tree).
+   Decided **trim**: dropped the two pure-progress breadcrumbs (`found disk … LUKS-formatting`,
+   `LUKS open OK; mkfs …`), kept all fail-open reasons + the single `SUCCESS` line (the initrd has no
+   journal handover, so that one line is the only console signal that the upper actually landed on
+   disk). `StandardError = "journal+console"` routing unchanged. Now matches the post-boot `/scratch`
+   path's "log only what you need to debug a fail-open" discipline (plus the one success line).
+2. ✅ **Re-flow the stale comment** in `guest/launcher.nix` (~L168) — DONE (working tree). Lifted the
+   invariants common to BOTH branches (key in guest RAM / never on 9p, cryptographic wipe-on-exit,
+   fail-open) into a general header that also names the two-case split; moved the format-fresh /
+   ext4 / pbkdf2 / size-cap specifics DOWN into the standalone `elif` where they actually happen. The
+   shared-pool `if` branch keeps its own local comment.
+3. ✅ **`udevadm` dependency** in `storeDiskScript` — DONE (working tree), resolved as **documented
+   keep**. There is no narrower provider of `udevadm` than `config.systemd.package` in nixpkgs, and
+   systemd is already fully in the initrd, so it adds zero closure — dropping it would only risk losing
+   the settle (the `find_dev` retry loop is the real safety net anyway). Added a self-documenting note
+   at the call site so it isn't re-flagged. **No code/behavior change** — comment only.
+4. ✅ **Re-ran `host.sh`** via the dry-run recipe — **46/46 green** here (2026-06-07). #10-C / this
+   session made **no wrapper change**, so host-side is genuinely unaffected; clean re-run closes the
+   loop. (Remember the egress branch needs `-e 's#@EGRESSALLOW@##g' -e 's#@EGRESSPORTS@#443#g'` added
+   to the recipe, else the lone egress assertion fails — that's a recipe-substitution gap, not a bug.)
 
 **Verification note:** cleanups 1–3 touch the guest closure → they need `nix flake check` +
-`tests/boot.sh` on a Nix+KVM box (auto-commit-on-green only after that). #4 is host-side, verifiable
-via the dry-run recipe below.
+`tests/boot.sh` on a Nix+KVM box (auto-commit-on-green only after that). #4 was host-side, verified
+here via the dry-run recipe below.
 
 **Also still open under #10 (optional, non-blocking, can wait):** L2 (`mountHostNixStore` as the
 overlay lower + a separate substituter option) and store-DB `.reginfo` registration; plus the optional
