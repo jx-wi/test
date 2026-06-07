@@ -106,10 +106,11 @@ after the session to tear the VM down (§5).
 
 The guest root is a **tmpfs** (RAM), so every byte the agent writes outside the project
 lives only in guest memory and vanishes on power-off. The system closure is mounted
-**read-only** at `/nix/store` — either a self-contained **squashfs** on a virtio-blk
-disk (default, maximal isolation) or the host store shared over 9p
-(`mountHostNixStore = true`, smaller/faster, less isolated). This is the well-worn
-"erase your darlings" pattern, so first-boot risk is low.
+**read-only** at `/nix/store` from a self-contained **squashfs** on a virtio-blk disk —
+always, for maximal isolation: nothing of the host store is exposed. This is the well-worn
+"erase your darlings" pattern, so first-boot risk is low. (Reusing the *host* store to
+accelerate in-VM builds is a separate, opt-in concern — a read-only build *substituter*,
+not a writable mount; see `nix.useHostStoreAsCache` in §3.11.)
 
 Boot is **direct kernel boot**: no bootloader. `mkccvm` extracts the kernel + initrd and
 hands QEMU `-kernel/-initrd/-append`. The initrd is the **systemd** one (the scripted
@@ -346,7 +347,12 @@ who wants anonymity runs Tor or a VPN on the host and the guest rides through it
 with no guest-side code. Egress *control* (where the agent may connect) belongs in ccvm;
 egress *anonymization* (how those packets reach the wire) belongs on the host.
 
-### 3.11 Encrypted disk pool (`vmDiskSize`) + in-VM nix (`nixInVm`)
+### 3.11 Encrypted disk pool (`vmDiskSize`) + in-VM nix (`nix.enable`)
+
+> **Naming note.** The user-facing option is `programs.ccvm.nix.enable` (with a sibling
+> `nix.useHostStoreAsCache`, §"Remaining follow-ons"). The guest/internal build-time flag this maps
+> to is still called `nixInVm` throughout the guest closure (`guest/default.nix`, `lib/mkccvm.nix`) —
+> the references to `nixInVm` below describe that internal mechanism.
 
 > **Status: both shipped & KVM-verified (2026-06-06).** Two opt-in, off-by-default features came out
 > of this design: **`vmDiskSize`** — an encrypted, ephemeral disk pool (key generated in guest RAM,
@@ -413,11 +419,14 @@ pool**, not two disks:
   is an integer so `mkDefault 32` reads naturally, but the *baked default is `0`* — off wins over
   a default size, per the locked "opt-in" decision.)
 
-**Relationship to `mountHostNixStore`.** These are complementary, not competing. If the multi-GB
-closure is *already realised in the host store*, `mountHostNixStore = true` exposes it read-only
-at zero RAM cost and needs no disk at all. The encrypted scratch disk is specifically for when
-the guest must **write** a large closure (or other large data) ephemerally and would otherwise
-exhaust RAM.
+**Relationship to the host store (`nix.useHostStoreAsCache`).** These are complementary, not
+competing. If the multi-GB closure is *already realised in the host store*, the planned
+`nix.useHostStoreAsCache` will let in-VM nix pull those paths from the host store as a read-only
+build **substituter** (a cache — never a writable mount, so the agent can't mutate the host's
+store) instead of rebuilding them, at near-zero RAM cost. The encrypted scratch disk is for the
+orthogonal case: when the guest must **write** a large closure (or other large data) ephemerally
+and would otherwise exhaust RAM. (The host store is *never* the guest's own boot store — that is
+always the self-contained squashfs, §3.4.)
 
 #### Implementation status & remaining plan
 
@@ -472,13 +481,19 @@ default initrd carries only squashfs/overlay/9p). Verified by `nix flake check`,
 disk-backed upper.
 
 **Remaining follow-ons (not blocking — `nix develop` with a disk works today):**
-- **L2 — `mountHostNixStore` as the overlay lower + acceleration.** Use the host store (ro 9p) as
-  the lower for path *availability*, plus a separate **substituter** option (host as a binary cache)
-  for the actual speed-up — because the FS mount alone gives paths but not the host nix **DB**
-  registration, so nix won't trust them as substitutes without more work (objection raised during
-  design). Two separate options, both opt-in.
+- **L2 — `nix.useHostStoreAsCache` (host store as a build substituter).** The option is **declared**
+  (so the public API is final and won't churn after release) but **not yet implemented** — it warns
+  at eval time and has no effect. The chosen mechanism is a read-only **substituter** (host store as
+  a binary cache: nix copies the needed paths into the VM's own store and registers them as valid),
+  *not* mounting the host store as the overlay lower. The overlay-lower approach was **considered and
+  rejected**: a bare FS mount gives path *presence* but not nix **DB** validity, so nix won't trust
+  those paths for builds without also loading the host store DB (`reginfo`) — and even done right it
+  exposes the *entire* host store to the agent (weaker isolation) for only a marginal copy-avoidance.
+  The substituter is the standard, DB-consistent, better-isolated mechanism (it surfaces only the
+  paths a build actually needs). It still reads the host store over a ro 9p mount internally, just as
+  a cache source rather than as the live store.
 - **Store-DB registration** (`closureInfo`/`.reginfo` load at boot) so nix reuses the baked paths
-  instead of re-fetching — a boot-time optimization, deferred.
+  instead of re-fetching — a boot-time optimization, deferred; part of the substituter work above.
 
 **Tests as established:** `host.sh` host-side staging in `nix flake check`; `boot.nix` postures
 (`scratch` for the disk, `nix` for in-VM nix) + `stub-claude.sh` reports (`SCRATCH:*`,

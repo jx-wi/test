@@ -37,8 +37,7 @@ let
       {
         nixpkgs.pkgs = pkgs;
         ccvm = {
-          inherit (config) apiKeyVariable extraPackages
-            mountHostNixStore nixInVm;
+          inherit (config) apiKeyVariable extraPackages nixInVm;
           claudePackage = config.package;
         };
       }
@@ -84,7 +83,13 @@ let
     platforms = lib.platforms.linux;
   };
 
-  wrapper = pkgs.writeShellApplication {
+  # useHostStoreAsCache is a DECLARED-but-unimplemented option (the design §3.11 "L2" work:
+  # register the host /nix/store as a substituter so in-VM `nix build`/`nix develop` reuse host-
+  # built paths). The user-facing option is final so it won't churn after going public, but it has
+  # no effect yet — warn loudly at eval time rather than silently no-op, so nobody assumes it works.
+  wrapper = lib.warnIf config.useHostStoreAsCache
+    "ccvm: programs.ccvm.nix.useHostStoreAsCache is not implemented yet (host-store substituter / build-cache, design §3.11 L2) — it currently has NO effect. Tracking in TODO.md #10."
+    (pkgs.writeShellApplication {
     name = "ccvm";
     inherit meta;
     runtimeInputs = with pkgs; [ qemu coreutils openssh findutils getent git ];
@@ -102,8 +107,6 @@ let
         "@PERSISTPROJECTS@"
         "@SHAREGIT@"
         "@CLAUDEMD@"
-        "@MOUNTHOSTSTORE@"
-        "@HOSTSTOREPATH@"
         "@QEMU@"
         "@DEFAULTMACHINE@"
         "@MEMLOCK@"
@@ -125,8 +128,6 @@ let
         (if config.persistClaudeProjects then "1" else "0")
         (if config.shareGitConfig then "1" else "0")
         claudeMdFile
-        (if config.mountHostNixStore then "1" else "0")
-        (builtins.storeDir)
         qemuBin
         defaultMachine
         (if config.lockGuestMemory then "1" else "0")
@@ -136,7 +137,7 @@ let
         (toString config.vmDiskSize)
       ]
       (builtins.readFile ../wrapper/ccvm.sh);
-  };
+  });
 in
 {
   inherit wrapper guestSystem toplevel storeImage append kernel initrd config meta;

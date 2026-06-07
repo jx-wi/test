@@ -70,14 +70,20 @@ These are the whole point of the project. Treat any change that weakens one as a
   project, no config) is the **opt-in**. Do not re-propose "secure by default" — that was the
   original spec and was deliberately reversed.
 - **RAM-only is the default; the disk pool and in-VM nix are opt-in.** `vmDiskSize=0` (no disk,
-  pure RAM) and `nixInVm=false` (read-only `/nix/store`, no in-VM nix, lean closure) are the
-  defaults — keep boot fast and the no-disk stance unless asked. `nixInVm` is **build-time** (it
-  flips `nix.enable` and rebuilds the store as a writable overlay in the initrd) — never try to
-  make it a runtime `CCVM_*` env var. Its overlay upper is tmpfs (RAM) by default; combine with
-  `vmDiskSize>0` and an initrd LUKS oneshot relocates that upper onto the encrypted disk (fail-open
-  to tmpfs), so a large `nix develop` doesn't OOM guest RAM — one shared pool also backs `/scratch`.
-  Three postures: minimal (`nixInVm=false`) · in-VM nix (`nixInVm=true`, guest-only) · + host store
-  (`+ mountHostNixStore`, exposes the host store ro). Don't collapse these or default any of them on.
+  pure RAM) and `nix.enable=false` (read-only `/nix/store`, no in-VM nix, lean closure) are the
+  defaults — keep boot fast and the no-disk stance unless asked. The user-facing option is
+  `programs.ccvm.nix.enable`; it maps to the guest/internal build-time flag still named `nixInVm`
+  (the guest closure + `lib/mkccvm.nix` use that name — don't rename it without a guest rebuild).
+  It is **build-time** (it flips `nix.enable` and rebuilds the store as a writable overlay in the
+  initrd) — never try to make it a runtime `CCVM_*` env var. Its overlay upper is tmpfs (RAM) by
+  default; combine with `vmDiskSize>0` and an initrd LUKS oneshot relocates that upper onto the
+  encrypted disk (fail-open to tmpfs), so a large `nix develop` doesn't OOM guest RAM — one shared
+  pool also backs `/scratch`. **The guest always boots off the self-contained squashfs store; the
+  host store is never the guest's boot store.** Reusing the host store to *accelerate* in-VM builds
+  is `nix.useHostStoreAsCache` — a read-only build **substituter** (never a writable host-store
+  mount), **declared but not implemented yet** (it warns at eval; design §3.11 L2 / TODO #10). The
+  old `mountHostNixStore` (host store as the guest's boot store) was **deliberately removed** in
+  this collapse — do not re-add it.
 - **`extraClaudeMd` is default-on context, not a flag.** A built-in blurb is staged as the
   guest's `~/.claude/CLAUDE.md` (via the seed, **appended** to any host-shared one — never
   clobbering it) so the agent knows it's in ccvm. It must stay seed-delivered, never become
@@ -94,7 +100,7 @@ These are the whole point of the project. Treat any change that weakens one as a
 ## Build / test / debug
 
 - Build the wrapper: `nix build .#ccvm`. **Iteration cost:** `memory`/`cores` are runtime
-  QEMU args (cheap, no rebuild); changing `package`/`extraPackages`/`mountHostNixStore`/guest
+  QEMU args (cheap, no rebuild); changing `package`/`extraPackages`/`nix.enable`/guest
   modules rebuilds the guest closure.
 - **Iterate fast with a stub `claude`** — the proven way to test file/config/arg behaviour
   without a real agent run. Bake a shell script as the `package` and assert on its stdout:

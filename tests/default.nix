@@ -31,8 +31,6 @@ let
           "@PERSISTPROJECTS@"
           "@SHAREGIT@"
           "@CLAUDEMD@"
-          "@MOUNTHOSTSTORE@"
-          "@HOSTSTOREPATH@"
           "@QEMU@"
           "@DEFAULTMACHINE@"
           "@MEMLOCK@"
@@ -57,8 +55,6 @@ let
           # asserts its marker + the runtime mode line reach seed/claude-md (production bakes the
           # real lib/ccvm-context.md).
           "${pkgs.writeText "ccvm-test-context.md" "CCVM-CONTEXT-MARKER baked blurb body\n"}"
-          "0" # MOUNTHOSTSTORE
-          "/nix/store" # HOSTSTOREPATH
           "true" # QEMU        (never invoked under dry run)
           "microvm" # DEFAULTMACHINE
           "0" # MEMLOCK

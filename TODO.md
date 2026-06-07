@@ -52,15 +52,199 @@ half-remembered context.
   dm-crypt ext4 not tmpfs, /scratch shares the pool + writable), with `nix flake check` clean. #12
   still adds **no** boot assertion (needs a persist-enabled `boot.nix` variant + a host-write check
   — see #12).
-- **Baked `@TOKENS@` now number 21** (added `@CLAUDEMD@` #8, `@PERSISTPROJECTS@` #12,
-  `@VERSION@` #6, `@VMDISKSIZE@` #10). The token list and value list in BOTH `lib/mkccvm.nix` and
-  `tests/default.nix` must stay balanced at 21 — verify with the awk one-liners (a mismatch
-  silently mis-bakes the wrapper).
+- **Baked `@TOKENS@` now number 19** (was 21; the `nix.*` option restructure **dropped
+  `@MOUNTHOSTSTORE@` + `@HOSTSTOREPATH@`** when `mountHostNixStore` was removed). The token list and
+  value list in BOTH `lib/mkccvm.nix` and `tests/default.nix` must stay balanced at 19 — verify with
+  the awk one-liners (a mismatch silently mis-bakes the wrapper). Re-verified here: 19/19 distinct
+  tokens in both files, wrapper substitutes with no leftover placeholders, `host.sh` 46/46.
 - **#5 resolved:** `jx-wi` is the user's real GitHub handle (no substitution was ever needed);
   repo will live at `github.com/jx-wi/ccvm`. The git remote is the user's to add on the host.
 - **RENAME (done, `c0c5e97`):** `shareHostConfig` → `shareClaudeConfig` everywhere (option, env
   `CCVM_SHARE_CLAUDE_CONFIG`, token `@SHARECLAUDE@`, seed marker `share-claude-config`). That is
   why #3 below reads as "dead `shareClaudeConfig` guest option" — it was `shareHostConfig` then.
+
+## ✅ #13 `nix.*` option restructure — DONE & KVM-VERIFIED 2026-06-07 (committed)
+
+**What & why (user decision, 2026-06-07):** collapse the two flat nix/store options into a nested
+`programs.ccvm.nix` namespace and pick the *cache* (substituter) model for host-store reuse over the
+"overlay lower" model:
+
+```nix
+programs.ccvm.nix = {
+  enable = false;              # was: nixInVm (in-VM nix: writable overlay store + nix command)
+  useHostStoreAsCache = false; # NEW, DECLARED-BUT-UNIMPLEMENTED: host store as a ro build substituter
+};
+```
+
+`mountHostNixStore` is **removed** (the "boot the guest off the host store" provisioning mode is
+gone — the guest now **always** boots the self-contained squashfs, max isolation). Rationale captured
+in design §3.11 (L2): the host store stays read-only (an rw mount would let the agent mutate the
+host's store — breaks the trust boundary); "lower mount" gives path presence without nix DB validity
+(half-broken) and exposes the whole store, so the **substituter** is the chosen mechanism. The option
+is declared now so the public API is final; it has **no effect yet** and emits a `lib.warnIf` at eval.
+
+**Internal vs user-facing naming:** only the *user-facing* home-manager surface nests. The
+guest/internal build-time flag stays named **`nixInVm`** (in `guest/default.nix`, `lib/mkccvm.nix`,
+`lib/defaults.nix`, `tests/boot.nix`) — the home-manager module maps `cfg.nix.enable -> nixInVm`. This
+kept the guest-closure churn (the Nix+KVM-only part) minimal.
+
+**Files changed (working tree, NOT committed):** `wrapper/ccvm.sh` (dropped `MOUNTHOSTSTORE`/
+`HOSTSTOREPATH` vars + the store-source `if`, store is always squashfs), `lib/mkccvm.nix` (dropped
+`@MOUNTHOSTSTORE@`/`@HOSTSTOREPATH@` tokens+values → **21→19**; dropped `mountHostNixStore` from the
+guest eval; wrapped the wrapper in `lib.warnIf config.useHostStoreAsCache`), `lib/defaults.nix`
+(`-mountHostNixStore`, `+useHostStoreAsCache`), `modules/home-manager.nix` (nested `nix` submodule +
+mkCcvm mapping), `guest/default.nix` (removed the option + simplified `roStore` to always-squashfs),
+`tests/default.nix` (dropped the 2 tokens), plus docs (README options table + In-VM-nix section,
+design §3.4 + §3.11, CLAUDE.md deliberate-defaults bullet).
+
+**Verified:** token balance **19/19** in both files; substituted wrapper has no leftover `@…@`;
+`bash -n` clean; **`host.sh` 46/46** (host-side, here). On the Nix+KVM box: **`nix flake check` clean**
+(only the pre-existing cosmetic `homeManagerModules`/`ccvmParts`/aarch64 warnings) + **`tests/boot.sh`
+31/31** (the `nix`/`nixDisk` postures use the internal `nixInVm` key, unchanged). Committed.
+
+**Two follow-ups deliberately NOT done in #13 (briefs below for a fresh session): (14) finish the
+rename so `nixInVm` disappears internally too; (15) actually implement `useHostStoreAsCache`.**
+
+---
+
+## ⬜ #14 Finish the rename: internal `nixInVm` → `nix.enable` everywhere (one name)
+
+**Goal (user ask):** after #13 there are TWO names for one thing — the public option is
+`programs.ccvm.nix.enable`, but the guest/internal build-time flag is still `nixInVm`, which leaks
+into test output (`ok - nixInVm: …`) and guest code. Make `nixInVm` disappear: use `nix.enable`
+(and `nix.useHostStoreAsCache`) consistently across the internal config, the guest module, the tests,
+and the comments — one name end to end. **Purely a rename/refactor — no behavior change.**
+
+**Why it wasn't done in #13:** to keep the guest-closure churn (the Nix+KVM-only part) minimal while
+the API shape was still being decided. The shape is now locked, so collapse the dual naming.
+
+**The one real obstacle — the shallow merge.** `lib/mkccvm.nix` does `config = defaults // userConfig`
+(a SHALLOW merge). If the internal config grows a nested `nix = { enable; useHostStoreAsCache; }`,
+then a caller passing `nix = { enable = true; }` would REPLACE the whole `nix` attr and silently drop
+`useHostStoreAsCache`. So pick ONE:
+- **(Recommended) Deep-merge + nested internal name.** Switch the merge to
+  `config = lib.recursiveUpdate defaults userConfig`. Safe here: `recursiveUpdate` deep-merges only
+  attrsets and replaces lists wholesale (same as `//`), and the only nested attrset would be `nix`;
+  all the list options (`extraPackages`, `egressAllowlist`, `egressPorts`, `extraGuestModules`) keep
+  their replace-wholesale semantics. Then internal/guest/tests all speak `nix.enable` /
+  `nix.useHostStoreAsCache` — exactly matching the public API. **Verify no other option relied on
+  shallow-replace of a nested attrset (none do today).**
+- (Alternative, lower-effort) Keep the internal config FLAT but rename the key `nixInVm` → `nixEnable`
+  (+ keep flat `useHostStoreAsCache`). Avoids touching the merge, but the internal name is `nixEnable`,
+  not `nix.enable` — still not a perfect match for the public shape. The user asked for `nix.enable`,
+  so prefer the deep-merge route unless it causes trouble.
+
+**Files to touch (deep-merge route):**
+- `lib/mkccvm.nix`: `defaults // userConfig` → `lib.recursiveUpdate defaults userConfig`; in the guest
+  eval pass `inherit (config) nix;` (the whole nested attr) instead of `nixInVm`; the `lib.warnIf`
+  condition becomes `config.nix.useHostStoreAsCache`.
+- `lib/defaults.nix`: replace flat `nixInVm` / `useHostStoreAsCache` with
+  `nix = { enable = false; useHostStoreAsCache = false; };`.
+- `guest/default.nix`: declare a nested `options.ccvm.nix = { enable = mkOption …; useHostStoreAsCache
+  = mkOption …; };` (or just `enable` until #15 needs the other); replace EVERY `cfg.nixInVm` →
+  `cfg.nix.enable` (there are ~10: the initrd module gates, `storeDiskScript` comment, the `storeFs`
+  branch, `nix.enable`/`nix.settings`). Update the comments that say "nixInVm".
+- `modules/home-manager.nix`: the `nixInVm = cfg.nix.enable;` mapping line goes away — pass
+  `inherit (cfg) nix;` (the whole nested option attr) into `mkCcvm`. (The user-facing option block is
+  already nested from #13, so it stays.)
+- `tests/boot.nix`: `mk { nixInVm = true; }` → `mk { nix.enable = true; }` (both the `nix` and
+  `nixDisk` postures).
+- `tests/boot.sh` + `tests/stub-claude.sh`: relabel the `nixInVm:` / `nixInVm+disk:` assertion strings
+  and the stub's comments → `nix.enable:` (cosmetic, but it's the whole point — the test output should
+  speak the public name).
+- `guest/launcher.nix`: the comments mentioning `nixInVm` (~L171, L181, L193) → `nix.enable`.
+- Docs: `CLAUDE.md` line ~59 ("(with `nixInVm`)") + the design §3.11 "Naming note" (which currently
+  says the internal name stays `nixInVm` — flip it to "now unified as `nix.enable`"); README is
+  already on `nix.enable`. Grep for any remaining `nixInVm`.
+
+**Verify (Nix+KVM):** `nix flake check` clean + `bash tests/boot.sh` 31/31 (now printing `nix.enable:`
+labels). `host.sh` is unaffected (the rename doesn't touch the wrapper's baked tokens — `nixInVm` was
+never a `@TOKEN@`, it's build-time guest config). Final `grep -rn nixInVm .` should return **zero** code
+hits (only historical TODO mentions).
+
+**Sequencing:** do **#14 before #15** so the cache implementation is written against the final names.
+
+---
+
+## ⬜ #15 Implement `useHostStoreAsCache` — host store as a read-only build substituter (design §3.11 L2)
+
+**Goal:** make `programs.ccvm.nix.useHostStoreAsCache = true` actually accelerate in-VM `nix
+build`/`nix develop` by reusing paths the HOST has already realised, instead of rebuilding/refetching
+them. Today the option is a **declared stub** (#13): it only emits a `lib.warnIf` and does nothing.
+This task replaces the stub with the real mechanism and **removes the warn**.
+
+**Locked design decisions (from the #13 discussion — do NOT relitigate):**
+- The host store is exposed **READ-ONLY**, as a **substituter / binary cache**, NEVER a writable
+  mount (an rw host-store mount would let the in-VM agent mutate the host's real `/nix/store` — a hard
+  trust-boundary break). Cache only.
+- **Substituter, not overlay-lower.** The "mount host store as the overlay lower" approach was
+  considered and **rejected**: a bare FS mount makes paths *present* but not nix-DB-*valid*, so nix
+  won't trust them for builds; and it exposes the entire host store. The substituter is the standard,
+  DB-consistent, better-isolated mechanism (nix pulls only the paths a build needs). See design §3.11.
+- The guest **boot** store stays the self-contained squashfs (always). The host store is ONLY a
+  build-time/runtime cache *source*, never the live `/nix/store`.
+- Only meaningful with `nix.enable = true` (no nix → nothing to substitute for). Consider an assertion
+  or warn if `useHostStoreAsCache && !nix.enable`.
+
+**The core nix problem to solve:** nix only trusts a store path as a substitutable input if it is
+registered as **valid** in the nix DB. A raw 9p-mounted host `/nix/store` gives files but no validity.
+So the implementation has two halves:
+1. **Make the host store readable in the guest.** Re-introduce the host-`/nix/store`-over-9p plumbing
+   that #13 removed (this is the "repurposed" plumbing referenced in design §3.11) — but mount it at a
+   SIDE path (e.g. `/nix/.host-store`), NOT as the live `/nix/store`. Wrapper side: attach the host
+   store as a ro 9p share (the old `-fsdev local,…,readonly=on` + `virtio-9p` device, mount_tag e.g.
+   `ccvm-hoststore`), gated on a seed marker. This likely re-adds a wrapper token or seed marker
+   (decide: build-time `@token@` like the old `@MOUNTHOSTSTORE@`, OR a runtime seed marker so it can be
+   a `CCVM_*` per-run override — but note the guest `nix.settings` substituter config is build-time, so
+   leaning build-time/baked is most consistent with `nix.enable`).
+2. **Register validity so nix will use it.** Options, pick one (spike both if unsure):
+   - **(a) Local-store substituter + host DB.** Configure guest
+     `nix.settings.extra-substituters = [ "local?root=/nix/.host-store" ]` (or the `file://`/`local`
+     store URI form for a chroot store) and make the host's store DB queryable — either share the
+     host's `/nix/var/nix/db` read-only too, or stage an exported `reginfo` (`nix-store --dump-db` on
+     the host → seed → `nix-store --load-db` in a guest boot oneshot). nix then queries the host store
+     for needed paths and copies them into the VM's own writable store (the nixInVm overlay upper),
+     registering them as valid. This reuses host *build outputs* generally.
+   - **(b) Closure reginfo (narrower).** Use `closureInfo`/`.reginfo` for a *specific* known closure
+     loaded at boot — simpler but only helps for pre-declared paths, not arbitrary host-built paths.
+     Probably too narrow for the "reuse my host store" intent; (a) is the real feature.
+   The design §3.11 "store-DB registration" follow-on is part of this — `reginfo`/`closureInfo` load
+   at boot is the mechanism that makes (a) work.
+3. **Remove the stub warn** in `lib/mkccvm.nix` (the `lib.warnIf config.useHostStoreAsCache …`) once
+   the feature works.
+
+**Security/threat-model notes to honor + document:**
+- Exposing the host `/nix/store` ro enlarges the host surface visible to the agent vs. the default
+  squashfs-only posture. Store paths are content-addressed PUBLIC packages, so ro exposure is low-risk
+  (already argued in design §3.11), but it IS a tradeoff — document it in README + design as the cost
+  of the acceleration, and keep it opt-in/off-by-default.
+- NEVER expose the host store rw; never share the host's signing keys / nothing secret. The 9p mount is
+  `readonly=on`. If sharing the host nix DB, share it ro too.
+
+**Build-time vs runtime:** `nix.enable` is build-time (rebuilds the guest). `useHostStoreAsCache`
+changes guest `nix.settings` (build-time) AND needs a runtime host-store 9p attach (wrapper). Simplest
+consistent choice: make it build-time too (baked into the guest like `nixInVm`), with the wrapper
+attaching the 9p share when the baked flag is on. Revisit if a per-run `CCVM_*` override is wanted.
+
+**Tests (definition of done):**
+- New `boot.nix` posture, e.g. `nixCache = mk { nix.enable = true; useHostStoreAsCache = true; }`.
+- `stub-claude.sh` reports something verifiable, e.g. `HOSTCACHE:configured` (the host store appears in
+  the guest's effective `nix.conf` substituters) and ideally a REAL check: `nix path-info --store
+  /nix/.host-store <some-host-path>` succeeds, or a `nix build` of a trivial host-realised path copies
+  rather than rebuilds (assert it didn't hit the network / was fast). `boot.sh` asserts these.
+- If a wrapper token/marker is added, add a `host.sh` assertion (host store 9p attached, reginfo staged
+  if used, NO secret/DB-rw leak into the seed) and rebalance the `@TOKEN@` count (19 → 20) in BOTH
+  `lib/mkccvm.nix` and `tests/default.nix` + the host.sh recipe.
+- `nix flake check` clean. Per CLAUDE.md, this is Nix+KVM-only — not auto-commit-on-green here.
+
+**Files likely touched:** `wrapper/ccvm.sh` (re-add host-store 9p attach + maybe reginfo staging),
+`lib/mkccvm.nix` (pass the flag to the guest, maybe a new token, drop the warn), `guest/default.nix`
+(nix.settings substituter + side-path ro mount + reginfo-load oneshot), `lib/defaults.nix` (already
+has the default), `modules/home-manager.nix` (already declares the option — update the description from
+"not implemented" to live), `tests/{boot.nix,boot.sh,stub-claude.sh,default.nix,host.sh}`, README +
+design §3.11 (flip L2 from "planned" to "implemented").
+
+---
 
 ## ✅ #10-C cleanup nits — DONE & KVM-VERIFIED 2026-06-07 (pre-public list now clear)
 
@@ -102,9 +286,11 @@ apart from the optional, non-blocking #10 L2 / store-DB-registration / #12 persi
 `tests/boot.sh` on a Nix+KVM box (auto-commit-on-green only after that). #4 was host-side, verified
 here via the dry-run recipe below.
 
-**Also still open under #10 (optional, non-blocking, can wait):** L2 (`mountHostNixStore` as the
-overlay lower + a separate substituter option) and store-DB `.reginfo` registration; plus the optional
-#12 persist boot-assertion. See #10 "Remaining" + design §3.11.
+**Also still open under #10 (optional, non-blocking, can wait):** L2 — **implement**
+`programs.ccvm.nix.useHostStoreAsCache` (the option is DECLARED but not implemented; it warns at
+eval). Chosen mechanism: host store as a read-only build **substituter** + store-DB `.reginfo`
+registration (the overlay-lower approach was considered and **rejected** — see design §3.11). Plus
+the optional #12 persist boot-assertion. See #10 "Remaining" + design §3.11.
 
 ## Working on this box without Nix (the key recipe)
 
@@ -121,8 +307,8 @@ CTX=$(mktemp); printf 'CCVM-CONTEXT-MARKER baked blurb body\n' > "$CTX"   # @CLA
       -e 's#@APPEND@#console=ttyS0#g' -e 's#@MEMORY@#4096#g' -e 's#@CORES@#4#g' \
       -e 's#@MODE@#rw#g' -e 's#@APIKEYVAR@#ANTHROPIC_API_KEY#g' -e 's#@SHARECLAUDE@#1#g' \
       -e 's#@PERSISTPROJECTS@#0#g' -e 's#@SHAREGIT@#1#g' -e "s#@CLAUDEMD@#$CTX#g" \
-      -e 's#@MOUNTHOSTSTORE@#0#g' -e 's#@HOSTSTOREPATH@#/nix/store#g' -e 's#@QEMU@#true#g' \
-      -e 's#@DEFAULTMACHINE@#microvm#g' -e 's#@MEMLOCK@#0#g' -e 's#@VERSION@#0.0.0-test#g' \
+      -e 's#@QEMU@#true#g' -e 's#@DEFAULTMACHINE@#microvm#g' -e 's#@MEMLOCK@#0#g' \
+      -e 's#@VERSION@#0.0.0-test#g' -e 's#@VMDISKSIZE@#0#g' \
       wrapper/ccvm.sh
 } > "$WRAP"; chmod +x "$WRAP"
 CCVM="$WRAP" bash tests/host.sh        # add -e 's#@EGRESSALLOW@##g' -e 's#@EGRESSPORTS@#443#g' on the egress branch
@@ -447,8 +633,10 @@ assertions), and a real `CCVM_VM_DISK_SIZE=4 nix run` showed `/scratch` as a 4 G
 **Problem:** the RAM-only model breaks for big **writable** data — `nix develop` realising a multi-GB
 closure, large `node_modules`/`target`/`.venv`, build outputs. tmpfs OOMs at `memory=4096`, and
 `/nix/store` is a read-only squashfs so you can't `nix build`/`nix develop` into it at all.
-`mountHostNixStore` covers the case where the closure is already realised on the **host** (ro, zero
-RAM); the disk pool is for when the guest must **write** large data ephemerally.
+the future `nix.useHostStoreAsCache` (L2, not built) will cover the case where the closure is already
+realised on the **host** (reuse via a ro substituter); the disk pool is for when the guest must
+**write** large data ephemerally. (`mountHostNixStore` — host store as the guest's boot store — was
+removed in the #13 `nix.*` restructure; the guest always boots the self-contained squashfs now.)
 
 **Increment A details (the shipped pool):** wrapper validates the GiB int, resolves a disk-backed
 image dir (refuses tmpfs unless `CCVM_SCRATCH_ALLOW_TMPFS=1`), sparse `truncate`d image attached as
@@ -490,8 +678,10 @@ scratch disk's by-id lags), `cryptsetup`/`e2fsprogs` in `boot.initrd.systemd.sto
 `host.sh` 46/46 hold too (no wrapper change). See design §3.11.
 
 **Remaining (not blocking — `nix develop` with a disk works today):**
-- **L2: `mountHostNixStore` as the overlay lower + a separate substituter option** — paths via the
-  FS mount, real accel via host-as-binary-cache (the FS mount alone lacks the host nix DB).
+- **L2: implement `nix.useHostStoreAsCache`** — host store as a ro **substituter** (host-as-binary-
+  cache) + store-DB `.reginfo` registration. The overlay-lower approach was **rejected** (FS mount
+  gives path presence but not nix DB validity, and exposes the whole store). Option declared (warns),
+  impl pending. See #13 + design §3.11.
 - **Store-DB registration** (`closureInfo`/`.reginfo` load at boot) so nix reuses baked paths — a
   boot-time optimization.
 - **Watch:** the bigger nix-enabled guest occasionally tripped the boot timeout once (worked on
@@ -567,9 +757,9 @@ project's slug instead of all of `projects/` if exposing all history to in-VM wr
   `egress-allowlist` branch was merged and deleted). The user adds the remote on the host.
 - **#5, #6, #7 done; #10 increments A (`vmDiskSize` `/scratch`) AND B (`nixInVm` writable store +
   in-VM nix) DONE & KVM-VERIFIED (2026-06-06).** Open work left under #10: wiring them together
-  (disk-backed overlay upper — the hard initrd-LUKS bit), L2 (`mountHostNixStore` lower +
-  substituter), and store-DB registration. Plus the optional #12 persist boot assertion. The
-  pre-public list is otherwise clear.
+  (disk-backed overlay upper — the hard initrd-LUKS bit, now DONE #10-C), L2 (`nix.useHostStoreAsCache`
+  substituter + store-DB registration; option declared in #13, impl pending). Plus the optional #12
+  persist boot assertion. The pre-public list is otherwise clear.
 - **Commit trailer:** `Co-authored-by: Claude <noreply@anthropic.com>` (exact form; see CLAUDE.md).
 - **Recently done, not a blocker:** `CCVM_MEMORY=<MiB>` per-run guest-RAM override (wrapper + docs
   + `host.sh` tests). The `memory` home-manager option already existed (default 4096); the new bit

@@ -23,8 +23,6 @@ SHARECLAUDE="@SHARECLAUDE@"
 PERSISTPROJECTS="@PERSISTPROJECTS@" # 1 = mount host ~/.claude/projects rw (resume + memory persist); 0 = off
 SHAREGIT="@SHAREGIT@" # 1 = stage a sanitized host git config into the guest; 0 = off
 CLAUDEMD="@CLAUDEMD@" # path to the baked ccvm-context CLAUDE.md (empty = inject nothing)
-MOUNTHOSTSTORE="@MOUNTHOSTSTORE@"
-HOSTSTOREPATH="@HOSTSTOREPATH@"
 MODE="@MODE@" # rw (autoUpdateFiles=true, default — mirrors native claude) | overlay (secure)
 MEMLOCK="@MEMLOCK@" # 1 = mlock guest RAM (lockGuestMemory) so it can't hit host swap; 0 = off
 EGRESSALLOW="@EGRESSALLOW@" # space-separated FQDN/IP/CIDR allowlist; empty = open egress (default)
@@ -408,16 +406,12 @@ else
   BUS="pci"
 fi
 
-# Root store: a self-contained read-only squashfs by default (max isolation), or the
-# host /nix/store shared read-only when mountHostNixStore is set (smaller/faster).
+# Root store: always a self-contained read-only squashfs (max isolation — nothing of the
+# host store is exposed). The guest mounts it at /nix/store, or (with in-VM nix) as the
+# read-only overlay lower under a writable upper.
 STORE_ARGS=()
-if [[ $MOUNTHOSTSTORE == 1 ]]; then
-  STORE_ARGS+=(-fsdev "local,id=nixstore,path=$HOSTSTOREPATH,security_model=none,readonly=on")
-  STORE_ARGS+=(-device "virtio-9p-$BUS,fsdev=nixstore,mount_tag=ccvm-nixstore")
-else
-  STORE_ARGS+=(-drive "id=store,file=$STOREIMG,format=raw,if=none,readonly=on")
-  STORE_ARGS+=(-device "virtio-blk-$BUS,drive=store")
-fi
+STORE_ARGS+=(-drive "id=store,file=$STOREIMG,format=raw,if=none,readonly=on")
+STORE_ARGS+=(-device "virtio-blk-$BUS,drive=store")
 
 # Workspace share. security_model=none (passthrough) — not mapped-xattr — so files
 # created in rw mode are owned by the host user with real perms (truly native), and no
@@ -514,8 +508,8 @@ if [[ $VMDISKSIZE != 0 ]]; then
   SCRATCH_IMG="$SCRATCH_DIR/vmdisk-$$-$RANDOM.img"
   truncate -s "${VMDISKSIZE}G" "$SCRATCH_IMG" || die "could not create disk image '$SCRATCH_IMG'"
   # serial=ccvm-scratch so the guest finds it at /dev/disk/by-id/virtio-ccvm-scratch regardless
-  # of disk ordering (with mountHostNixStore the store is a 9p mount, so this is /dev/vda; else
-  # /dev/vdb — by-id avoids hardcoding either).
+  # of disk ordering (the squashfs store is /dev/vda, so this scratch disk is /dev/vdb — by-id
+  # avoids hardcoding either).
   SCRATCH_ARGS+=(-drive "id=scratch,file=$SCRATCH_IMG,format=raw,if=none")
   SCRATCH_ARGS+=(-device "virtio-blk-$BUS,drive=scratch,serial=ccvm-scratch")
   printf '1' >"$SEED/vm-disk"

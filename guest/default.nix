@@ -108,11 +108,6 @@ in
     # flag (read by launcher.nix), NOT by a guest option — so there is deliberately no
     # `shareClaudeConfig` option here. The host-side default lives in lib/mkccvm.nix and is
     # baked into the wrapper as @SHARECLAUDE@.
-    mountHostNixStore = lib.mkOption {
-      type = lib.types.bool;
-      default = false;
-      description = "Share the host /nix/store read-only instead of a self-contained image.";
-    };
     nixInVm = lib.mkOption {
       type = lib.types.bool;
       default = false;
@@ -215,23 +210,18 @@ in
     ];
 
     # Filesystems: tmpfs root (RAM, discarded on power-off) + the read-only system closure. The
-    # closure is a self-contained squashfs on the first virtio-blk disk (default, max isolation)
-    # or the host store over 9p. With nixInVm it becomes the overlay LOWER (at /nix/.ro-store)
-    # under a writable /nix/store; without it (the lean default) it is /nix/store directly, ro.
+    # closure is always a self-contained squashfs on the first virtio-blk disk (max isolation —
+    # nothing of the host store is exposed). With nixInVm it becomes the overlay LOWER (at
+    # /nix/.ro-store) under a writable /nix/store; without it (the lean default) it is /nix/store
+    # directly, ro.
     fileSystems =
       let
-        roStore =
-          if cfg.mountHostNixStore then {
-            device = "ccvm-nixstore";
-            fsType = "9p";
-            options = [ "trans=virtio" "version=9p2000.L" "msize=1048576" "access=any" "ro" "cache=loose" ];
-            neededForBoot = true;
-          } else {
-            device = "/dev/vda";
-            fsType = "squashfs";
-            options = [ "ro" ];
-            neededForBoot = true;
-          };
+        roStore = {
+          device = "/dev/vda";
+          fsType = "squashfs";
+          options = [ "ro" ];
+          neededForBoot = true;
+        };
         # No size cap on root => defaults to 50% of VM RAM.
         rootFs."/" = {
           device = "tmpfs";
