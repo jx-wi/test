@@ -62,46 +62,38 @@ half-remembered context.
   `CCVM_SHARE_CLAUDE_CONFIG`, token `@SHARECLAUDE@`, seed marker `share-claude-config`). That is
   why #3 below reads as "dead `shareClaudeConfig` guest option" — it was `shareHostConfig` then.
 
-## ⏭ NEXT TASK — disk-backed `nixInVm` upper is DONE & KVM-VERIFIED; pick up the optional #10 follow-ons
+## ⏭ NEXT SESSION — nits & cleanups (low-risk polish; #10-C is DONE & KVM-VERIFIED)
 
-The hard initrd-LUKS increment (back the `nixInVm` overlay upper with the `vmDiskSize` disk) is
-**DONE & KVM-VERIFIED (2026-06-07)** — see #10. The pre-public list is otherwise clear. What's left
-under #10 is **optional** and non-blocking: **L2** (`mountHostNixStore` as the overlay lower + a
-separate substituter option for real acceleration) and **store-DB `.reginfo` registration** (reuse
-baked paths instead of re-fetching). Plus the optional #12 persist boot-assertion. None are required
-to go public.
+The pre-public feature work is complete: the disk-backed `nixInVm` upper (the hard initrd-LUKS
+increment) landed in `2723eef` and is **DONE & KVM-VERIFIED 2026-06-07** — see #10 "Increment C" for
+the full record (mount-stacking + fail-open, one shared encrypted pool, `nix flake check` clean +
+`tests/boot.sh` 31/31 + a real 8 GiB `nix build`). This session is **polish only** — small, optional,
+each independently committable. None block going public.
 
-**What was implemented & verified (mount-stacking + fail-open — the lowest-brick-risk shape):**
-- `guest/default.nix`: a `let` binding `storeDiskScript` (initrd oneshot) + `boot.initrd.systemd.services.ccvm-store-disk`
-  (gated `lib.mkIf cfg.nixInVm`). The declarative tmpfs `/nix/.rw-store` is **unchanged** (the
-  fail-open baseline). The service runs **After** that tmpfs mount (`unitConfig.RequiresMountsFor =
-  "/sysroot/nix/.rw-store"` — avoids hardcoding the escaped mount-unit name) and **Before**
-  `sysroot-nix-store.mount` (the overlay). When the disk is present it
-  `luksFormat`/`open`/`mkfs.ext4`s it and mounts it **OVER** the tmpfs, so the overlay's
-  `upperdir=/nix/.rw-store/store` lands on disk; the overlay config is **identical** either way.
-  Absent disk / ANY failure → tmpfs remains (the script always `exit 0`).
-- **Pool sharing:** on success the initrd writes `/run/ccvm-store-on-disk` (systemd preserves `/run`
-  across switch-root); `guest/launcher.nix` post-boot binds `/nix/.rw-store/scratch` to `/scratch`
-  (one shared pool — verified by `lsblk`: a single `ccvm-scratch` crypt device backs both
-  `/nix/.rw-store` AND `/scratch`). Without the marker → the standalone `/scratch` LUKS path, unchanged.
-- **Key hygiene preserved:** key generated in initrd `/run` (RAM), `shred`ded right after open, never on 9p.
-- **No wrapper change** (the disk is already attached when `VMDISKSIZE>0`; `nixInVm` is build-time).
+**Cleanup candidates (from the #10-C session — low risk, do any/all):**
+1. **Trim the initrd logging** in `guest/default.nix` `storeDiskScript`. It logs progress breadcrumbs
+   (`found disk` / `LUKS open OK` / `SUCCESS`) via `StandardError = "journal+console"`, chattier than
+   the post-boot `/scratch` path (`guest/launcher.nix`), which logs *only* fail-open reasons. Decide:
+   keep (it's the hardest path to debug — no initrd→journal handover, so console breadcrumbs earned
+   their keep during bring-up) vs. trim to fail-open reasons + one success line for consistency.
+2. **Re-flow the stale comment** in `guest/launcher.nix` (~L168–178). The "encrypted disk pool"
+   block predates the new `if [ vm-disk ] && [ /run/ccvm-store-on-disk ] … elif …` split, so it now
+   sits above the *shared-pool* branch while describing the *standalone* path. Reorder so each branch's
+   comment is local to it.
+3. **Narrow the `udevadm` dependency** in `storeDiskScript`: it pulls `config.systemd.package` into the
+   script's `makeBinPath` just for `udevadm settle`. Works (systemd's already in the initrd), but a
+   tighter reference (or dropping it if `udevadm` is otherwise on the initrd PATH) would be cleaner.
+4. **Re-run `host.sh`** via the dry-run recipe for completeness. #10-C made **no wrapper change**, so
+   it's genuinely unaffected (was 46/46), but a clean re-run closes the loop. (Verify here on the
+   no-Nix box; the guest-side cleanups 1–3 need a Nix+KVM `nix flake check` + `tests/boot.sh` pass.)
 
-**Three initrd requirements discovered during KVM bring-up (all now in the code + comments — the
-default initrd carries none of them, so they are nixInVm-gated):**
-1. **`udevadm settle`** before probing — the scratch disk (`vdb`) is *undeclared*, so the initrd only
-   waits for the store disk (`vda`); its `/dev/disk/by-id` symlink lags without a settle.
-2. **`cryptsetup` + `e2fsprogs` listed in `boot.initrd.systemd.storePaths` directly** — a script's
-   transitive refs are NOT pulled into the initrd, so referencing them only via the script's `PATH`
-   gave `cryptsetup: command not found` (ENOENT on exec). List the packages.
-3. **`ext4` in the initrd module list** — the default initrd has only `squashfs`/`overlay`/`9p`, so
-   `mount` reported `unknown filesystem type 'ext4'` until `ext4` (+ its dep closure) was added.
+**Verification note:** cleanups 1–3 touch the guest closure → they need `nix flake check` +
+`tests/boot.sh` on a Nix+KVM box (auto-commit-on-green only after that). #4 is host-side, verifiable
+via the dry-run recipe below.
 
-**Verified on Nix+KVM (2026-06-07):** `nix flake check` clean; `tests/boot.sh` **31/31** (incl. the 6
-`nixInVm+disk` assertions: store still overlay, nix present, upper is dm-crypt ext4 *not* tmpfs,
-`/scratch` shares the pool + writable); a real `nixInVm=true` + `CCVM_VM_DISK_SIZE=8` run where
-`nix build nixpkgs#hello` succeeded with `/nix/.rw-store` on a 7.8 G dm-crypt device (vs. the 1 GiB
-test disk correctly filling up — proof writes hit the disk, not RAM).
+**Also still open under #10 (optional, non-blocking, can wait):** L2 (`mountHostNixStore` as the
+overlay lower + a separate substituter option) and store-DB `.reginfo` registration; plus the optional
+#12 persist boot-assertion. See #10 "Remaining" + design §3.11.
 
 ## Working on this box without Nix (the key recipe)
 
