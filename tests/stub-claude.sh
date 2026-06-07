@@ -87,6 +87,31 @@ if [ -d /nix/.rw-store ]; then
   fi
 fi
 
+# nix.useHostStoreAsCache: the host /nix/store should be mounted READ-ONLY at the chroot-store
+# root /nix/.host-store/nix/store, and nix.conf should carry the `local?root=…` substituter.
+# Report both so boot.sh can assert the host-cache posture (real copy-acceleration is a human/spike
+# check — it depends on the host store DB being visible, the pending #15 increment).
+if mountpoint -q /nix/.host-store/nix/store 2>/dev/null ||
+   { [ -d /nix/.host-store/nix/store ] && [ -n "$(ls -A /nix/.host-store/nix/store 2>/dev/null)" ]; }; then
+  echo "HOSTCACHE:mounted"
+  # ro: a write into the mount must fail.
+  if : 2>/dev/null >/nix/.host-store/nix/store/.ccvm-write-probe; then
+    rm -f /nix/.host-store/nix/store/.ccvm-write-probe 2>/dev/null
+    echo "HOSTCACHE:writable" # should NOT happen — the share must be ro
+  else
+    echo "HOSTCACHE:readonly"
+  fi
+else
+  echo "HOSTCACHE:absent"
+fi
+# nix.conf substituter (the chroot store). `nix show-config`/`nix.conf` both name it.
+if { nix config show 2>/dev/null || nix show-config 2>/dev/null || cat /etc/nix/nix.conf 2>/dev/null; } |
+   grep -q 'root=/nix/.host-store'; then
+  echo "HOSTCACHE:configured"
+else
+  echo "HOSTCACHE:unconfigured"
+fi
+
 # Egress probes (best-effort, short timeout). With open egress both reach; with the
 # example.com allowlist only the allowed host reaches and the other is blocked. boot.sh
 # asserts on these only in the egress scenario.

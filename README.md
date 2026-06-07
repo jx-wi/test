@@ -111,7 +111,7 @@ Those `ccvm` flags are intercepted by the wrapper and are **not** forwarded to c
 | `cores` | `4` | VM vCPUs. |
 | `extraPackages` | `[ ]` | Extra tools inside the VM (a sensible base set is always present). |
 | `nix.enable` | `false` | Enable in-VM `nix` (`nix develop`/`nix build`). On → guest gets `nix.enable` + a **writable `/nix/store` overlay** (ro store lower + tmpfs upper), so nix realises paths into RAM; set `vmDiskSize` to back the upper with disk for big closures. Build-time (rebuilds the guest), not an env var — a writable store must be set up in the initrd. See [In-VM nix](#in-vm-nix-nixenable). |
-| `nix.useHostStoreAsCache` | `false` | **Not implemented yet** (declared so the API is final). Will register the host `/nix/store` as a build substituter to accelerate in-VM `nix build`/`nix develop`. Read-only by design (the host store is never written from the VM). Requires `nix.enable`. Emits a build-time warning while unimplemented. |
+| `nix.useHostStoreAsCache` | `false` | **Experimental.** Attaches the host `/nix/store` to the VM as a **read-only** 9p mount and registers it as a `local?root=…` build substituter so in-VM `nix build`/`nix develop` can reuse paths the host already realised. Read-only by design (the host store is never written from the VM). Requires `nix.enable`. Per-run: `CCVM_NIX_HOST_CACHE=0\|1`. Note: real copy-reuse also needs the host store's nix DB visible to the VM — that increment is still in progress (design §3.11 L2). |
 | `apiKeyVariable` | `"ANTHROPIC_API_KEY"` | Host env var carrying the key; passed only via SSH `SendEnv`. |
 | `shareClaudeConfig` | `true` | Mount the host `~/.claude` (ro) so the VM reuses your login, settings, commands and memory (home-manager symlinks are dereferenced); writes stay ephemeral. Per-run: `CCVM_SHARE_CLAUDE_CONFIG=0\|1`. |
 | `persistClaudeProjects` | `false` | **Opt-in.** Mount the host `~/.claude/projects` into the VM **read-write** so Claude's session transcripts and per-project memory persist back to the host — `claude --resume` then works across runs and memory survives. Off by default (those writes are otherwise ephemeral, like the rest of `~/.claude`). Scoped to `projects/` only, so the OAuth credential is still never written back. See [Resuming sessions & persisting memory](#resuming-sessions--persisting-memory). Per-run: `CCVM_PERSIST_PROJECTS=0\|1`. |
@@ -142,6 +142,7 @@ Those `ccvm` flags are intercepted by the wrapper and are **not** forwarded to c
 | `ccvm --ccvm-help` | List ccvm's own flags + env knobs and exit (bare `--help` still forwards to claude). |
 | `ccvm --ccvm-version` | Print the ccvm version and exit (bare `--version` still forwards to claude). |
 | `CCVM_VM_DISK_SIZE=<GiB>\|0` | Attach (or disable) the encrypted disk pool (`/scratch`) for one run (overrides the baked `vmDiskSize`). |
+| `CCVM_NIX_HOST_CACHE=0\|1` | Attach (or disable) the read-only host `/nix/store` build cache for one run (overrides the baked `nix.useHostStoreAsCache`; needs `nix.enable`). |
 | `CCVM_SCRATCH_DIR=<dir>` | Where the host keeps the (sparse, encrypted) scratch image — must be disk-backed; default `${XDG_CACHE_HOME:-~/.cache}/ccvm`. |
 | `CCVM_SCRATCH_ALLOW_TMPFS=1` | Permit a tmpfs scratch dir (normally refused, since a RAM-backed "disk" defeats the point). For tests / unusual setups. |
 
@@ -214,11 +215,14 @@ large data ephemerally; with `nix.enable` on, the pool also backs the writable `
 | **Minimal** *(default)* | `nix.enable = false` | read-only image | none; smallest closure, fastest boot |
 | **In-VM nix** | `nix.enable = true` | **writable overlay** (ro image lower + writable upper) | none — the guest builds its own paths into a self-contained store |
 
-The guest always boots off a **self-contained** `/nix/store` image — nothing of the host store is
-exposed. To *accelerate* in-VM builds by reusing host-built paths, the planned
-`nix.useHostStoreAsCache` will register the host store as a read-only build **substituter** (not a
-writable mount — the host store is never modified from the VM). That's declared but **not yet
-implemented** (it warns when set; see TODO #10).
+The guest always boots off a **self-contained** `/nix/store` image — by default nothing of the host
+store is exposed. To *accelerate* in-VM builds by reusing host-built paths, set
+`nix.useHostStoreAsCache = true` (or `CCVM_NIX_HOST_CACHE=1`): the host `/nix/store` is attached as a
+**read-only** 9p mount (never a writable mount — the host store is never modified from the VM) at a
+side path `/nix/.host-store`, and registered as a `local?root=…` build **substituter**. This is
+**experimental** — the store mount + substituter are wired up, but actual copy-reuse also needs the
+host store's nix DB visible to the VM so nix trusts the paths as valid; that increment is still in
+progress (design §3.11 L2 / TODO #15).
 
 With `nix.enable`, the overlay's writable upper is **tmpfs (RAM)** by default — a big `nix develop`
 will exhaust guest RAM, so set **`vmDiskSize`** to relocate the upper onto the encrypted ephemeral

@@ -32,4 +32,8 @@ in
   # dm-crypt ext4 (RWSTORE:disk + RWSTORE:encrypted), the store is still an overlay, and /scratch
   # works. 1 GiB is enough for the LUKS header + ext4 (sparse, so ~free on disk).
   nixDisk = mk { nix.enable = true; vmDiskSize = 1; };
+  # In-VM nix + host /nix/store as a read-only build cache. The stub asserts the host store is
+  # mounted ro at the chroot-store root (/nix/.host-store) and that nix.conf carries the
+  # `local?root=…` substituter. DB-validity / real copy-acceleration is a human/spike check.
+  nixCache = mk { nix.enable = true; nix.useHostStoreAsCache = true; };
 }

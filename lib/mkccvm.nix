@@ -91,12 +91,14 @@ let
     platforms = lib.platforms.linux;
   };
 
-  # useHostStoreAsCache is a DECLARED-but-unimplemented option (the design §3.11 "L2" work:
-  # register the host /nix/store as a substituter so in-VM `nix build`/`nix develop` reuse host-
-  # built paths). The user-facing option is final so it won't churn after going public, but it has
-  # no effect yet — warn loudly at eval time rather than silently no-op, so nobody assumes it works.
-  wrapper = lib.warnIf config.nix.useHostStoreAsCache
-    "ccvm: programs.ccvm.nix.useHostStoreAsCache is not implemented yet (host-store substituter / build-cache, design §3.11 L2) — it currently has NO effect. Tracking in TODO.md #10."
+  # useHostStoreAsCache (design §3.11 "L2"): expose the host /nix/store to the guest as a read-only
+  # build substituter so in-VM `nix build`/`nix develop` reuse host-built paths instead of rebuilding.
+  # Build-time + baked (it changes guest nix.settings AND makes the wrapper attach the host store as a
+  # ro 9p share) — see @HOSTSTORECACHE@ below and guest/default.nix. Only meaningful with nix.enable;
+  # warn (not a hard assert — keeps `nix flake check` evaluable) if set without it, since there is then
+  # no in-VM nix to consume the cache.
+  wrapper = lib.warnIf (config.nix.useHostStoreAsCache && !config.nix.enable)
+    "ccvm: programs.ccvm.nix.useHostStoreAsCache has no effect without nix.enable = true (no in-VM nix to use the host-store cache)."
     (pkgs.writeShellApplication {
     name = "ccvm";
     inherit meta;
@@ -122,6 +124,7 @@ let
         "@EGRESSPORTS@"
         "@VERSION@"
         "@VMDISKSIZE@"
+        "@HOSTSTORECACHE@"
       ]
       [
         kernel
@@ -143,6 +146,7 @@ let
         (lib.concatStringsSep " " (map toString config.egressPorts))
         version
         (toString config.vmDiskSize)
+        (if config.nix.useHostStoreAsCache then "1" else "0")
       ]
       (builtins.readFile ../wrapper/ccvm.sh);
   });

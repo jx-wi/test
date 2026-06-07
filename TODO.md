@@ -203,7 +203,63 @@ hits (only historical TODO mentions).
 
 ---
 
-## ⬜ #15 Implement `useHostStoreAsCache` — host store as a read-only build substituter (design §3.11 L2)
+## 🟡 #15 Implement `useHostStoreAsCache` — host store as a read-only build substituter (design §3.11 L2)
+
+**Status (2026-06-07): host-side plumbing + guest mount/substituter DONE & host-verified; the DB-validity
+crux remains (needs a spike on the Nix+KVM box).** Working tree (NOT committed unless noted below):
+
+**Done & verified here (host-side, 49/49 host.sh):**
+- Wrapper (`wrapper/ccvm.sh`): baked `HOSTSTORECACHE="@HOSTSTORECACHE@"` + `CCVM_NIX_HOST_CACHE` per-run
+  override; a block that — when on and the host has `/nix/store` — attaches it as a **read-only** 9p share
+  (`local,…,readonly=on`, `mount_tag=ccvm-hoststore`) and writes the `nix-host-store-cache` seed marker;
+  wired `HOSTSTORE_ARGS` into the QEMU array; added to `--ccvm-help`.
+- `lib/mkccvm.nix`: new `@HOSTSTORECACHE@` token+value (from `config.nix.useHostStoreAsCache`) → **tokens
+  19→20** (balanced 20/20 in `lib/mkccvm.nix` + `tests/default.nix`, re-verified). Reworked the eval warn:
+  was "not implemented"; now only warns if `useHostStoreAsCache && !nix.enable` (no in-VM nix to use it).
+- `host.sh` §13 (3 new assertions: default off → no marker; opt-in → marker; opt-in stages NO secret) →
+  **49/49** via the dry-run recipe (recipe now substitutes `@HOSTSTORECACHE@`).
+
+**Done on the working tree, NEEDS KVM verification (guest-side — touches the closure):**
+- `guest/launcher.nix`: when the marker is present, mount `ccvm-hoststore` **ro** at the chroot-store root
+  `/nix/.host-store/nix/store` (fail-open).
+- `guest/default.nix`: when `cfg.nix.useHostStoreAsCache`, `nix.settings` adds
+  `extra-substituters = [ "local?root=/nix/.host-store" ]` + `extra-trusted-substituters` + `require-sigs
+  = false`.
+- Tests: `boot.nix` `nixCache` posture; `stub-claude.sh` reports `HOSTCACHE:mounted|readonly|configured`;
+  `boot.sh` asserts the host store is mounted **read-only** + the substituter is in `nix.conf`.
+- Docs: README (option/env/In-VM-nix), design §3.11 L2 (flipped to "experimental, in progress" with the
+  done/remaining split), CLAUDE.md deliberate-defaults bullet, home-manager option description.
+
+**THE REMAINING CRUX (spike on the Nix+KVM box before claiming #15 done):** the chroot store substitutes
+only if its DB (`/nix/.host-store/nix/var/nix/db`) reports the host paths VALID — that DB is **not
+populated yet**, so today the mount + substituter are wired but won't actually avoid rebuilds. Two
+mechanisms to spike + pick:
+- **(a) mount host `/nix/var/nix/db` ro too** (add a second ro 9p share in the wrapper + bind it under the
+  chroot root). Simplest, BUT the host's live sqlite DB is WAL-mode and a ro-mounted WAL DB can refuse to
+  open without `immutable=1` — verify nix opens substituter DBs read-only/immutable.
+- **(b) stage `nix-store --dump-db` reginfo at launch** → `nix-store --load-db` into a writable (tmpfs) DB
+  at the chroot root's `nix/var/nix/db`. Avoids live-DB contention; cost is the dump at launch (perf/perms
+  to check — wrapper runs as the non-root host user).
+Also confirm: a `local?root=…` chroot store keeps logical storeDir `/nix/store` (so paths match the guest
+store and substitution actually hits). Quick spike on the box, e.g.:
+```sh
+# does a chroot store preserve /nix/store logical paths + substitute from the host store?
+T=$(mktemp -d); P=$(nix-build '<nixpkgs>' -A hello --no-out-link)
+nix copy --no-check-sigs --to "local?root=$T" "$P" && ls "$T/nix/store" | head   # Q: paths under $T/nix/store?
+nix path-info --store "local?root=$T" "$P"                                       # Q: valid in the chroot store?
+```
+Once (a)/(b) works: drop the "experimental" wording, add a boot.sh assertion that a host-realised path
+substitutes (no rebuild), and flip design §3.11 L2 to "implemented".
+
+**Verify (Nix+KVM):** `nix flake check` clean + `bash tests/boot.sh` (now with the `nixCache` posture —
+should be 34/34: 31 + 3 host-cache) + a real `CCVM_NIX_HOST_CACHE=1 nix.enable` run showing the substituter
+in `nix.conf` and (after the DB piece) a host path copied instead of rebuilt.
+
+---
+
+### Original brief (for reference)
+
+## #15 Implement `useHostStoreAsCache` — host store as a read-only build substituter (design §3.11 L2)
 
 **Goal:** make `programs.ccvm.nix.useHostStoreAsCache = true` actually accelerate in-VM `nix
 build`/`nix develop` by reusing paths the HOST has already realised, instead of rebuilding/refetching

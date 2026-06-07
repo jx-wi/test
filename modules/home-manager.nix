@@ -88,12 +88,16 @@ in
           Reuse the host's /nix/store to accelerate in-VM builds by registering it as a build
           substituter (binary cache), so paths the host has already realised are copied into the
           VM's store instead of rebuilt. Only meaningful with `nix.enable = true`. Read-only by
-          construction — the host store is never written from the VM (that would let the agent
-          mutate the host's store), so this is a cache, not a writable mount.
+          construction — the host store is attached as a read-only 9p mount and registered as a
+          `local?root=…` substituter; it is never written from the VM (that would let the agent
+          mutate the host's store), so this is a cache, not a writable mount. Exposing the host
+          store read-only does enlarge the host surface visible to the agent, but store paths are
+          content-addressed public packages, so the exposure is low-risk (design §3.11).
 
-          NOT IMPLEMENTED YET: this option is declared so the public API is final, but it has no
-          effect today and emits a build-time warning when set. Tracked as the design §3.11 "L2"
-          work (substituter + store-DB / reginfo registration). See TODO.md #10.
+          EXPERIMENTAL: the host store is mounted and the substituter is registered, but actual
+          copy-reuse also requires the host store's nix DB to be visible to the VM (so nix trusts
+          the paths as valid) — that increment is still in progress, so today this may not yet
+          avoid rebuilds. Tracked as design §3.11 "L2" / TODO.md #15.
         '';
       };
     };

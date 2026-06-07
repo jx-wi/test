@@ -482,19 +482,35 @@ default initrd carries only squashfs/overlay/9p). Verified by `nix flake check`,
 disk-backed upper.
 
 **Remaining follow-ons (not blocking — `nix develop` with a disk works today):**
-- **L2 — `nix.useHostStoreAsCache` (host store as a build substituter).** The option is **declared**
-  (so the public API is final and won't churn after release) but **not yet implemented** — it warns
-  at eval time and has no effect. The chosen mechanism is a read-only **substituter** (host store as
-  a binary cache: nix copies the needed paths into the VM's own store and registers them as valid),
-  *not* mounting the host store as the overlay lower. The overlay-lower approach was **considered and
-  rejected**: a bare FS mount gives path *presence* but not nix **DB** validity, so nix won't trust
-  those paths for builds without also loading the host store DB (`reginfo`) — and even done right it
-  exposes the *entire* host store to the agent (weaker isolation) for only a marginal copy-avoidance.
-  The substituter is the standard, DB-consistent, better-isolated mechanism (it surfaces only the
-  paths a build actually needs). It still reads the host store over a ro 9p mount internally, just as
-  a cache source rather than as the live store.
-- **Store-DB registration** (`closureInfo`/`.reginfo` load at boot) so nix reuses the baked paths
-  instead of re-fetching — a boot-time optimization, deferred; part of the substituter work above.
+- **L2 — `nix.useHostStoreAsCache` (host store as a build substituter) — EXPERIMENTAL, in progress
+  (2026-06-07).** The chosen mechanism is a read-only **substituter** (host store as a binary cache:
+  nix copies the needed paths into the VM's own store and registers them as valid), *not* mounting the
+  host store as the overlay lower. The overlay-lower approach was **considered and rejected**: a bare
+  FS mount gives path *presence* but not nix **DB** validity, so nix won't trust those paths for builds
+  without also loading the host store DB (`reginfo`) — and even done right it exposes the *entire* host
+  store to the agent (weaker isolation) for only a marginal copy-avoidance. The substituter is the
+  standard, DB-consistent, better-isolated mechanism (it surfaces only the paths a build actually
+  needs). It still reads the host store over a ro 9p mount internally, just as a cache source rather
+  than as the live store.
+
+  **Done so far (host-side + plumbing):** the wrapper attaches the host `/nix/store` as a **read-only**
+  9p share (`readonly=on`, `mount_tag=ccvm-hoststore`), gated on the baked `@HOSTSTORECACHE@` flag
+  (from `nix.useHostStoreAsCache`; per-run `CCVM_NIX_HOST_CACHE`) and a `nix-host-store-cache` seed
+  marker; the guest mounts it ro at the chroot-store root `/nix/.host-store` (so
+  `/nix/.host-store/nix/store` == the host store) and `nix.settings` registers
+  `extra-substituters = [ "local?root=/nix/.host-store" ]` (+ `require-sigs = false`, host paths being
+  unsigned). `host.sh` asserts the marker + no secret staged; `boot.sh` (the `nixCache` posture)
+  asserts the host store is mounted **read-only** and the substituter is in `nix.conf`.
+
+  **Remaining (the crux — needs a spike on a Nix box):** for nix to actually *substitute* from the
+  chroot store, that store's **DB** must report the host paths as valid. The chroot store reads its DB
+  at `/nix/.host-store/nix/var/nix/db`, which is **not** populated yet. Two candidate mechanisms, to be
+  spiked: **(a)** mount the host's `/nix/var/nix/db` read-only too (simplest, but the host's live
+  sqlite DB is WAL-mode and a ro-mounted WAL DB can refuse to open — needs `immutable=1`/verification);
+  **(b)** stage a `nix-store --dump-db` reginfo at launch and `--load-db` it into a writable (tmpfs) DB
+  at the chroot root (avoids live-DB contention; cost is the dump at launch). Also unverified: that a
+  `local?root=…` chroot store keeps logical storeDir `/nix/store` so paths match the guest store.
+  Until (a)/(b) lands the feature is wired but won't avoid rebuilds — hence "experimental".
 
 **Tests as established:** `host.sh` host-side staging in `nix flake check`; `boot.nix` postures
 (`scratch` for the disk, `nix` for in-VM nix) + `stub-claude.sh` reports (`SCRATCH:*`,

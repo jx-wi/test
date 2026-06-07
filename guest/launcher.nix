@@ -222,6 +222,26 @@ let
         fi
       fi
 
+      # Opt-in: host /nix/store as a read-only build cache (nix.useHostStoreAsCache). The host
+      # attached its /nix/store as a READ-ONLY 9p share (mount_tag ccvm-hoststore); we mount it at
+      # a chroot-store layout under /nix/.host-store (so /nix/.host-store/nix/store == the host
+      # store), which guest/default.nix registers as a substituter `local?root=/nix/.host-store`.
+      # NEVER the live /nix/store — the guest's own store is always the squashfs/overlay (§3.4) —
+      # and strictly read-only, so the agent can't mutate the host's real store. Mounted here
+      # (runtime, gated on the seed marker) rather than declaratively because the share only exists
+      # when the host opted in. Best-effort: a hiccup must not fail the oneshot and block sshd.
+      # NOTE: the substituter also needs the host store's nix DB to know which paths are valid —
+      # that piece (live ro db mount vs. a staged `reginfo`/`--dump-db` loaded at boot) is the
+      # remaining increment (TODO #15 / design §3.11 L2); the store files are mounted here regardless.
+      if [ -f "$seed/nix-host-store-cache" ]; then
+        if mkdir -p /nix/.host-store/nix/store \
+           && mount -t 9p -o ${p9},ro ccvm-hoststore /nix/.host-store/nix/store 2>/dev/null; then
+          : # mounted ro; substituter registration is baked into nix.conf (guest/default.nix)
+        else
+          echo "ccvm: host-store cache: mount failed; continuing without it" >&2
+        fi
+      fi
+
       # Opt-in egress allowlist. The host (which has working DNS) resolved the configured
       # FQDNs into IPs and wrote them to seed/egress-allow; seed/egress-enforce is the
       # "lock down" marker. An ABSENT marker means open egress — the native default — and we

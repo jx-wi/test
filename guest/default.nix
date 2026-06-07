@@ -386,9 +386,23 @@ in
     # Mutable nix only when nix.enable is on (writable /nix/store overlay above). Off by default —
     # the store is read-only, so the channel/daemon machinery is skipped and the closure stays lean.
     nix.enable = cfg.nix.enable;
-    nix.settings = lib.mkIf cfg.nix.enable {
+    nix.settings = lib.mkIf cfg.nix.enable ({
       experimental-features = [ "nix-command" "flakes" ]; # `nix develop`/`nix build` on flakes
       trusted-users = [ "root" "ccvm" ]; # let the agent add substituters / build without sudo
-    };
+    }
+    # useHostStoreAsCache: register the read-only host store (mounted by launcher.nix at the
+    # chroot-store root /nix/.host-store) as a build substituter, so in-VM nix copies paths the
+    # host already realised instead of rebuilding them. `local?root=…` is a chroot store: its
+    # logical storeDir stays /nix/store (so paths MATCH the guest store) while the files live under
+    # the root — exactly what we want for cache reuse. require-sigs=false because host-built paths
+    # are unsigned (a local trusted store, not an untrusted binary cache). NB: efficacy still
+    # depends on the host store's nix DB being visible at the root (the pending #15 increment); the
+    # substituter is declared here so nix.conf is ready, and is harmless if the DB isn't present yet
+    # (nix simply finds no valid paths to substitute).
+    // lib.optionalAttrs cfg.nix.useHostStoreAsCache {
+      extra-substituters = [ "local?root=/nix/.host-store" ];
+      extra-trusted-substituters = [ "local?root=/nix/.host-store" ];
+      require-sigs = false;
+    });
   };
 }

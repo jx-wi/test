@@ -27,6 +27,7 @@ WRAP_EGRESS="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix 
 WRAP_SCRATCH="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix scratch)/bin/ccvm"
 WRAP_NIX="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix nix)/bin/ccvm"
 WRAP_NIXDISK="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix nixDisk)/bin/ccvm"
+WRAP_NIXCACHE="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix nixCache)/bin/ccvm"
 
 # Deterministic git-config fixture so the shareGitConfig assertions don't depend on the
 # runner's real ~/.gitconfig. Point HOME here for the wrapper runs (set AFTER `nix build`, so
@@ -220,6 +221,25 @@ grep -qa '^SCRATCH:mounted$' <<<"$OUT" &&
 grep -qa '^SCRATCH:writable$' <<<"$OUT" &&
   ok "nix.enable+disk: /scratch is writable by the agent" || no "nix.enable+disk: /scratch not writable"
 rm -rf "$PROJ_ND" "$ND_TMP"
+
+# ---- nix.useHostStoreAsCache: host /nix/store mounted ro as a build cache ----
+# The wrapper attaches the host's /nix/store as a READ-ONLY 9p share; the guest mounts it at the
+# chroot-store root /nix/.host-store and registers `local?root=/nix/.host-store` as a substituter.
+# Assert the structural guarantees: the host store is mounted, it is read-only (the agent must not
+# be able to mutate the host's real store), and the substituter is in nix.conf. Real copy-reuse
+# depends on the host store DB being visible (the pending #15 increment) and is a human/spike check.
+PROJ_HC="$(mktemp -d)"
+OUT="$(run_capture "$WRAP_NIXCACHE" "$PROJ_HC")"
+grep -qa '^HOSTCACHE:mounted$' <<<"$OUT" &&
+  ok "hostStoreCache: host /nix/store is mounted in the guest" ||
+  no "hostStoreCache: host store not mounted: $(grep -a '^HOSTCACHE:' <<<"$OUT")"
+grep -qa '^HOSTCACHE:readonly$' <<<"$OUT" &&
+  ok "hostStoreCache: host store mount is read-only (agent can't mutate the host store)" ||
+  no "hostStoreCache: host store mount NOT read-only — trust-boundary break: $(grep -a '^HOSTCACHE:' <<<"$OUT")"
+grep -qa '^HOSTCACHE:configured$' <<<"$OUT" &&
+  ok "hostStoreCache: nix.conf carries the local?root=/nix/.host-store substituter" ||
+  no "hostStoreCache: substituter not in nix.conf: $(grep -a '^HOSTCACHE:' <<<"$OUT")"
+rm -rf "$PROJ_HC"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

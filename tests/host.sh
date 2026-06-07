@@ -410,6 +410,35 @@ else
   ok "vmDiskSize: invalid size is rejected"
 fi
 
+# ===========================================================================
+# 13. nix.useHostStoreAsCache: opt-in attaches the host /nix/store as a READ-ONLY
+#     build cache. Host-side we can assert the seed marker (default off / opt-in on)
+#     and that nothing secret is staged for it — the ro 9p attach + the substituter
+#     registration are guest-side and covered by tests/boot.sh.
+# ===========================================================================
+# Default (baked HOSTSTORECACHE=0): no marker.
+SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 run)/seed"
+[[ ! -e "$SEED/nix-host-store-cache" ]] &&
+  ok "hostStoreCache: default off stages no marker" ||
+  no "hostStoreCache: marker present without opt-in"
+
+# Opt in via the env override. Requires the host to have a /nix/store (this runner does);
+# the wrapper writes the marker so the guest knows to mount + register the ro host-store share.
+SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 CCVM_NIX_HOST_CACHE=1 run)/seed"
+[[ "$(cat "$SEED/nix-host-store-cache" 2>/dev/null)" == 1 ]] &&
+  ok "hostStoreCache: CCVM_NIX_HOST_CACHE=1 writes the marker" ||
+  no "hostStoreCache: opt-in did not write the marker"
+
+# The cache is a READ-ONLY 9p mount of the host store; nothing about it is staged into the seed
+# beyond the marker — no key, no credential, no copied store path. Assert the seed stays clean.
+if [[ -z "$(find "$SEED" -name '*.key' 2>/dev/null)" ]] &&
+   [[ -z "$(grep -rl "$API_KEY" "$SEED" 2>/dev/null)" ]] &&
+   [[ -z "$(grep -rl "$CRED_MARKER" "$SEED" 2>/dev/null)" ]]; then
+  ok "hostStoreCache: opt-in stages no secret (marker only; store rides a ro 9p mount)"
+else
+  no "hostStoreCache: secret material LEAKED into the seed on opt-in"
+fi
+
 # ---------------------------------------------------------------------------
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
