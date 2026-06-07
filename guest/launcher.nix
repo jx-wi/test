@@ -60,7 +60,11 @@ let
 
   seedSetup = pkgs.writeShellApplication {
     name = "ccvm-seed-setup";
-    runtimeInputs = [ pkgs.coreutils pkgs.util-linux pkgs.shadow pkgs.gnugrep pkgs.nftables pkgs.kmod pkgs.cryptsetup pkgs.e2fsprogs ];
+    runtimeInputs = [ pkgs.coreutils pkgs.util-linux pkgs.shadow pkgs.gnugrep pkgs.nftables pkgs.kmod pkgs.cryptsetup pkgs.e2fsprogs ]
+      # nix-store, only when in-VM nix is on, to --load-db the host-store cache reginfo (#15). nix is
+      # already in the closure when nix.enable is on, so this adds ~nothing; gated so the default
+      # (no-nix) seed service stays lean.
+      ++ lib.optionals cfg.nix.enable [ config.nix.package ];
     text = ''
       seed=/run/ccvm-seed
       mkdir -p "$seed"
@@ -230,13 +234,19 @@ let
       # and strictly read-only, so the agent can't mutate the host's real store. Mounted here
       # (runtime, gated on the seed marker) rather than declaratively because the share only exists
       # when the host opted in. Best-effort: a hiccup must not fail the oneshot and block sshd.
-      # NOTE: the substituter also needs the host store's nix DB to know which paths are valid —
-      # that piece (live ro db mount vs. a staged `reginfo`/`--dump-db` loaded at boot) is the
-      # remaining increment (TODO #15 / design §3.11 L2); the store files are mounted here regardless.
+      # The substituter also needs the host store's nix DB to know which paths are valid. A
+      # ro-mounted live DB can't be opened (a chroot store must WRITE a lock file), so the host
+      # staged a `nix-store --dump-db` reginfo into the seed; we load it into a WRITABLE DB at the
+      # chroot root (on the tmpfs root, so only the store FILES come over ro 9p). After that nix
+      # trusts the ro paths and substitutes them via the baked `local?root=…` substituter.
       if [ -f "$seed/nix-host-store-cache" ]; then
         if mkdir -p /nix/.host-store/nix/store \
            && mount -t 9p -o ${p9},ro ccvm-hoststore /nix/.host-store/nix/store 2>/dev/null; then
-          : # mounted ro; substituter registration is baked into nix.conf (guest/default.nix)
+          if [ -f "$seed/nix-store-db" ]; then
+            mkdir -p /nix/.host-store/nix/var/nix/db
+            nix-store --store "local?root=/nix/.host-store" --load-db <"$seed/nix-store-db" 2>/dev/null \
+              || echo "ccvm: host-store cache: load-db failed; cache mounted but paths won't substitute" >&2
+          fi
         else
           echo "ccvm: host-store cache: mount failed; continuing without it" >&2
         fi

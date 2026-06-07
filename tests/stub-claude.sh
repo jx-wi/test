@@ -88,9 +88,9 @@ if [ -d /nix/.rw-store ]; then
 fi
 
 # nix.useHostStoreAsCache: the host /nix/store should be mounted READ-ONLY at the chroot-store
-# root /nix/.host-store/nix/store, and nix.conf should carry the `local?root=…` substituter.
-# Report both so boot.sh can assert the host-cache posture (real copy-acceleration is a human/spike
-# check — it depends on the host store DB being visible, the pending #15 increment).
+# root /nix/.host-store/nix/store; nix.conf should carry the `local?root=…` substituter; and the
+# staged reginfo should have been loaded so paths in the ro store are reported VALID (which is what
+# lets nix substitute them). Report all three so boot.sh can assert the host-cache posture.
 if mountpoint -q /nix/.host-store/nix/store 2>/dev/null ||
    { [ -d /nix/.host-store/nix/store ] && [ -n "$(ls -A /nix/.host-store/nix/store 2>/dev/null)" ]; }; then
   echo "HOSTCACHE:mounted"
@@ -110,6 +110,16 @@ if { nix config show 2>/dev/null || nix show-config 2>/dev/null || cat /etc/nix/
   echo "HOSTCACHE:configured"
 else
   echo "HOSTCACHE:unconfigured"
+fi
+# Real validity check: the reginfo should have been loaded into the chroot store's DB, so a path
+# present in the ro host store must be reported VALID via local?root=/nix/.host-store — exactly what
+# lets nix substitute it instead of rebuilding. Pick any store path the host carries and query it.
+hp="$(ls /nix/.host-store/nix/store 2>/dev/null | grep -m1 -E '^[a-z0-9]{32}-' || true)"
+if [ -n "$hp" ] &&
+   nix path-info --store "local?root=/nix/.host-store" "/nix/store/$hp" >/dev/null 2>&1; then
+  echo "HOSTCACHE:db-valid"
+else
+  echo "HOSTCACHE:db-invalid"
 fi
 
 # Egress probes (best-effort, short timeout). With open egress both reach; with the

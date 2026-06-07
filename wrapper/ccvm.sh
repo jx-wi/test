@@ -540,6 +540,19 @@ if [[ $HOSTSTORECACHE == 1 ]]; then
     HOSTSTORE_ARGS+=(-fsdev "local,id=hoststore,path=/nix/store,security_model=none,readonly=on")
     HOSTSTORE_ARGS+=(-device "virtio-9p-$BUS,fsdev=hoststore,mount_tag=ccvm-hoststore")
     printf '1' >"$SEED/nix-host-store-cache"
+    # Stage the host store's path-validity DB so the guest can register the ro-mounted paths as
+    # valid in a chroot store and actually substitute them. We export a DUMP rather than sharing
+    # the live DB because a chroot store must WRITE a lock file to open its DB, so a read-only DB
+    # mount fails ("opening lock file …: Permission denied") — the guest loads this dump into a
+    # writable copy instead. Non-secret: store-path registration metadata only (hashes, refs,
+    # sizes — store paths are public). Best-effort: without nix-store on the host the cache still
+    # mounts but nix won't trust the paths (no substitution), so warn rather than fail the launch.
+    if command -v nix-store >/dev/null 2>&1; then
+      nix-store --dump-db >"$SEED/nix-store-db" 2>/dev/null ||
+        { warn "could not export the host nix DB (reginfo) — host-store cache mounted but paths won't substitute"; rm -f "$SEED/nix-store-db"; }
+    else
+      warn "nix-store not found on the host — host-store cache mounted but paths won't substitute (no validity DB)"
+    fi
   else
     warn "nix.useHostStoreAsCache is on but the host has no /nix/store — skipping the host-store cache"
   fi

@@ -111,7 +111,7 @@ Those `ccvm` flags are intercepted by the wrapper and are **not** forwarded to c
 | `cores` | `4` | VM vCPUs. |
 | `extraPackages` | `[ ]` | Extra tools inside the VM (a sensible base set is always present). |
 | `nix.enable` | `false` | Enable in-VM `nix` (`nix develop`/`nix build`). On → guest gets `nix.enable` + a **writable `/nix/store` overlay** (ro store lower + tmpfs upper), so nix realises paths into RAM; set `vmDiskSize` to back the upper with disk for big closures. Build-time (rebuilds the guest), not an env var — a writable store must be set up in the initrd. See [In-VM nix](#in-vm-nix-nixenable). |
-| `nix.useHostStoreAsCache` | `false` | **Experimental.** Attaches the host `/nix/store` to the VM as a **read-only** 9p mount and registers it as a `local?root=…` build substituter so in-VM `nix build`/`nix develop` can reuse paths the host already realised. Read-only by design (the host store is never written from the VM). Requires `nix.enable`. Per-run: `CCVM_NIX_HOST_CACHE=0\|1`. Note: real copy-reuse also needs the host store's nix DB visible to the VM — that increment is still in progress (design §3.11 L2). |
+| `nix.useHostStoreAsCache` | `false` | Attaches the host `/nix/store` to the VM as a **read-only** 9p mount and registers it as a `local?root=…` build substituter so in-VM `nix build`/`nix develop` reuse paths the host already realised instead of rebuilding them. The host's path-validity DB is staged as a `nix-store --dump-db` reginfo and loaded into the VM (a live host DB can't be mounted read-only). Read-only by design (the host store is never written from the VM). Requires `nix.enable`. Per-run: `CCVM_NIX_HOST_CACHE=0\|1`. Exposes the host store ro — low-risk (content-addressed public packages), opt-in. |
 | `apiKeyVariable` | `"ANTHROPIC_API_KEY"` | Host env var carrying the key; passed only via SSH `SendEnv`. |
 | `shareClaudeConfig` | `true` | Mount the host `~/.claude` (ro) so the VM reuses your login, settings, commands and memory (home-manager symlinks are dereferenced); writes stay ephemeral. Per-run: `CCVM_SHARE_CLAUDE_CONFIG=0\|1`. |
 | `persistClaudeProjects` | `false` | **Opt-in.** Mount the host `~/.claude/projects` into the VM **read-write** so Claude's session transcripts and per-project memory persist back to the host — `claude --resume` then works across runs and memory survives. Off by default (those writes are otherwise ephemeral, like the rest of `~/.claude`). Scoped to `projects/` only, so the OAuth credential is still never written back. See [Resuming sessions & persisting memory](#resuming-sessions--persisting-memory). Per-run: `CCVM_PERSIST_PROJECTS=0\|1`. |
@@ -219,10 +219,13 @@ The guest always boots off a **self-contained** `/nix/store` image — by defaul
 store is exposed. To *accelerate* in-VM builds by reusing host-built paths, set
 `nix.useHostStoreAsCache = true` (or `CCVM_NIX_HOST_CACHE=1`): the host `/nix/store` is attached as a
 **read-only** 9p mount (never a writable mount — the host store is never modified from the VM) at a
-side path `/nix/.host-store`, and registered as a `local?root=…` build **substituter**. This is
-**experimental** — the store mount + substituter are wired up, but actual copy-reuse also needs the
-host store's nix DB visible to the VM so nix trusts the paths as valid; that increment is still in
-progress (design §3.11 L2 / TODO #15).
+side path `/nix/.host-store`, its path-validity DB is staged as a `nix-store --dump-db` reginfo and
+loaded into the VM, and the result is registered as a `local?root=…` build **substituter**. So when
+in-VM nix needs a path the host already has, it copies it from the read-only mount instead of
+rebuilding/refetching. (The DB is staged as a dump because a live host nix DB can't be opened
+read-only — a chroot store must write a lock file.) Exposing the host store read-only enlarges the
+host surface visible to the agent, but store paths are content-addressed public packages, so the
+exposure is low-risk; it's opt-in and off by default.
 
 With `nix.enable`, the overlay's writable upper is **tmpfs (RAM)** by default — a big `nix develop`
 will exhaust guest RAM, so set **`vmDiskSize`** to relocate the upper onto the encrypted ephemeral

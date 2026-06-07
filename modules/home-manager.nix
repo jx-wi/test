@@ -90,14 +90,12 @@ in
           VM's store instead of rebuilt. Only meaningful with `nix.enable = true`. Read-only by
           construction — the host store is attached as a read-only 9p mount and registered as a
           `local?root=…` substituter; it is never written from the VM (that would let the agent
-          mutate the host's store), so this is a cache, not a writable mount. Exposing the host
-          store read-only does enlarge the host surface visible to the agent, but store paths are
-          content-addressed public packages, so the exposure is low-risk (design §3.11).
-
-          EXPERIMENTAL: the host store is mounted and the substituter is registered, but actual
-          copy-reuse also requires the host store's nix DB to be visible to the VM (so nix trusts
-          the paths as valid) — that increment is still in progress, so today this may not yet
-          avoid rebuilds. Tracked as design §3.11 "L2" / TODO.md #15.
+          mutate the host's store), so this is a cache, not a writable mount. The host's
+          path-validity DB is staged as a `nix-store --dump-db` reginfo and loaded into the VM (a
+          live host DB can't be mounted read-only), so nix trusts the paths and substitutes them.
+          Exposing the host store read-only does enlarge the host surface visible to the agent, but
+          store paths are content-addressed public packages, so the exposure is low-risk (design
+          §3.11). Per-run override: CCVM_NIX_HOST_CACHE=0|1.
         '';
       };
     };

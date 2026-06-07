@@ -482,8 +482,8 @@ default initrd carries only squashfs/overlay/9p). Verified by `nix flake check`,
 disk-backed upper.
 
 **Remaining follow-ons (not blocking — `nix develop` with a disk works today):**
-- **L2 — `nix.useHostStoreAsCache` (host store as a build substituter) — EXPERIMENTAL, in progress
-  (2026-06-07).** The chosen mechanism is a read-only **substituter** (host store as a binary cache:
+- **L2 — `nix.useHostStoreAsCache` (host store as a build substituter) — IMPLEMENTED (reginfo),
+  pending final KVM boot-test (2026-06-07).** The chosen mechanism is a read-only **substituter** (host store as a binary cache:
   nix copies the needed paths into the VM's own store and registers them as valid), *not* mounting the
   host store as the overlay lower. The overlay-lower approach was **considered and rejected**: a bare
   FS mount gives path *presence* but not nix **DB** validity, so nix won't trust those paths for builds
@@ -493,24 +493,32 @@ disk-backed upper.
   needs). It still reads the host store over a ro 9p mount internally, just as a cache source rather
   than as the live store.
 
-  **Done so far (host-side + plumbing):** the wrapper attaches the host `/nix/store` as a **read-only**
-  9p share (`readonly=on`, `mount_tag=ccvm-hoststore`), gated on the baked `@HOSTSTORECACHE@` flag
-  (from `nix.useHostStoreAsCache`; per-run `CCVM_NIX_HOST_CACHE`) and a `nix-host-store-cache` seed
-  marker; the guest mounts it ro at the chroot-store root `/nix/.host-store` (so
-  `/nix/.host-store/nix/store` == the host store) and `nix.settings` registers
-  `extra-substituters = [ "local?root=/nix/.host-store" ]` (+ `require-sigs = false`, host paths being
-  unsigned). `host.sh` asserts the marker + no secret staged; `boot.sh` (the `nixCache` posture)
-  asserts the host store is mounted **read-only** and the substituter is in `nix.conf`.
+  **Mechanism (implemented).** The wrapper attaches the host `/nix/store` as a **read-only** 9p share
+  (`readonly=on`, `mount_tag=ccvm-hoststore`), gated on the baked `@HOSTSTORECACHE@` flag (from
+  `nix.useHostStoreAsCache`; per-run `CCVM_NIX_HOST_CACHE`) and a `nix-host-store-cache` seed marker,
+  and also stages a `nix-store --dump-db` **reginfo** (`nix-store-db`). The guest mounts the store ro
+  at the chroot-store root `/nix/.host-store` (so `/nix/.host-store/nix/store` == the host store),
+  loads the reginfo into a **writable** DB at `/nix/.host-store/nix/var/nix/db`, and `nix.settings`
+  registers `extra-substituters = [ "local?root=/nix/.host-store" ]` (+ `require-sigs = false`, host
+  paths being unsigned). A `local?root=…` chroot store keeps its logical storeDir `/nix/store`, so the
+  paths match the guest store and substitute directly.
 
-  **Remaining (the crux — needs a spike on a Nix box):** for nix to actually *substitute* from the
-  chroot store, that store's **DB** must report the host paths as valid. The chroot store reads its DB
-  at `/nix/.host-store/nix/var/nix/db`, which is **not** populated yet. Two candidate mechanisms, to be
-  spiked: **(a)** mount the host's `/nix/var/nix/db` read-only too (simplest, but the host's live
-  sqlite DB is WAL-mode and a ro-mounted WAL DB can refuse to open — needs `immutable=1`/verification);
-  **(b)** stage a `nix-store --dump-db` reginfo at launch and `--load-db` it into a writable (tmpfs) DB
-  at the chroot root (avoids live-DB contention; cost is the dump at launch). Also unverified: that a
-  `local?root=…` chroot store keeps logical storeDir `/nix/store` so paths match the guest store.
-  Until (a)/(b) lands the feature is wired but won't avoid rebuilds — hence "experimental".
+  **Why a staged reginfo, not a ro DB mount (spike result, 2026-06-07).** A spike on the Nix box
+  settled the open fork. Mounting the host's live `/nix/var/nix/db` **read-only** does NOT work: a
+  chroot store must *write* its lock file to open the DB, so it fails with `opening lock file
+  "…/big-lock": Permission denied`. Dumping the DB (`nix-store --dump-db`, ~19 MB / ~2 s on a typical
+  dev store) and `--load-db`-ing it into a writable copy **does** work (`nix path-info` then reports
+  the ro-mounted paths valid, and `nix-store --dump` can read their NARs — i.e. they substitute). So
+  only the store **files** ride ro 9p; the DB is a normal writable sqlite on the guest's tmpfs,
+  sidestepping both the lock-file problem and any sqlite-over-9p concern. Cost: the ~19 MB dump staged
+  per launch (acceptable for an opt-in; could later be scoped to a closure if it grows).
+
+  **Tests.** `host.sh` asserts the marker + that nothing secret is staged; `boot.sh` (the `nixCache`
+  posture) asserts the host store is mounted **read-only**, the substituter is in `nix.conf`, and a
+  host store path is reported **valid** via the chroot store (`HOSTCACHE:db-valid` — proves the
+  reginfo loaded and nix will substitute rather than rebuild). **Still to confirm on KVM:** the
+  `nixCache` boot posture green end-to-end (the guest-side reginfo `--load-db` is the one part not
+  exercisable host-side).
 
 **Tests as established:** `host.sh` host-side staging in `nix flake check`; `boot.nix` postures
 (`scratch` for the disk, `nix` for in-VM nix) + `stub-claude.sh` reports (`SCRATCH:*`,

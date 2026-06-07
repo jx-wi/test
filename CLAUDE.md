@@ -81,13 +81,14 @@ These are the whole point of the project. Treat any change that weakens one as a
   pool also backs `/scratch`. **The guest always boots off the self-contained squashfs store; the
   host store is never the guest's boot store.** Reusing the host store to *accelerate* in-VM builds
   is `nix.useHostStoreAsCache` — a read-only build **substituter** (never a writable host-store
-  mount): the wrapper attaches host `/nix/store` as a **ro** 9p share, the guest mounts it at the
-  chroot-store root `/nix/.host-store` and registers `local?root=/nix/.host-store` as a substituter.
-  **Experimental** (design §3.11 L2 / TODO #15) — the store mount + substituter are wired, but real
-  copy-reuse still needs the host store's nix DB visible (live ro mount vs. staged `reginfo`); that
-  piece is unverified. Baked build-time flag `@HOSTSTORECACHE@` + seed marker `nix-host-store-cache`
-  + per-run `CCVM_NIX_HOST_CACHE`. The old `mountHostNixStore` (host store as the guest's boot store)
-  was **deliberately removed** — do not re-add it; the cache is ro, never the boot store.
+  mount): the wrapper attaches host `/nix/store` as a **ro** 9p share AND stages a `nix-store
+  --dump-db` reginfo; the guest mounts the store at the chroot-store root `/nix/.host-store`, loads
+  the reginfo into a **writable** DB there (a live host DB can't be ro-mounted — a chroot store must
+  write a lock file), and registers `local?root=/nix/.host-store` as a substituter (design §3.11 L2
+  / TODO #15). Baked build-time flag `@HOSTSTORECACHE@` + seed markers `nix-host-store-cache` +
+  `nix-store-db` + per-run `CCVM_NIX_HOST_CACHE`. The reginfo DB MUST be writable (load into tmpfs),
+  never a ro mount. The old `mountHostNixStore` (host store as the guest's boot store) was
+  **deliberately removed** — do not re-add it; the cache is ro, never the boot store.
 - **`extraClaudeMd` is default-on context, not a flag.** A built-in blurb is staged as the
   guest's `~/.claude/CLAUDE.md` (via the seed, **appended** to any host-shared one — never
   clobbering it) so the agent knows it's in ccvm. It must stay seed-delivered, never become

@@ -391,14 +391,13 @@ in
       trusted-users = [ "root" "ccvm" ]; # let the agent add substituters / build without sudo
     }
     # useHostStoreAsCache: register the read-only host store (mounted by launcher.nix at the
-    # chroot-store root /nix/.host-store) as a build substituter, so in-VM nix copies paths the
-    # host already realised instead of rebuilding them. `local?root=…` is a chroot store: its
-    # logical storeDir stays /nix/store (so paths MATCH the guest store) while the files live under
-    # the root — exactly what we want for cache reuse. require-sigs=false because host-built paths
-    # are unsigned (a local trusted store, not an untrusted binary cache). NB: efficacy still
-    # depends on the host store's nix DB being visible at the root (the pending #15 increment); the
-    # substituter is declared here so nix.conf is ready, and is harmless if the DB isn't present yet
-    # (nix simply finds no valid paths to substitute).
+    # chroot-store root /nix/.host-store, with its validity DB loaded from the staged reginfo) as a
+    # build substituter, so in-VM nix copies paths the host already realised instead of rebuilding
+    # them. `local?root=…` is a chroot store: its logical storeDir stays /nix/store (so paths MATCH
+    # the guest store) while the files live under the root — exactly what we want for cache reuse.
+    # require-sigs=false because host-built paths are unsigned (a local trusted store, not an
+    # untrusted binary cache). If the marker/reginfo aren't present (cache off, or a fail-open at
+    # boot) the substituter just finds nothing to substitute — harmless.
     // lib.optionalAttrs cfg.nix.useHostStoreAsCache {
       extra-substituters = [ "local?root=/nix/.host-store" ];
       extra-trusted-substituters = [ "local?root=/nix/.host-store" ];

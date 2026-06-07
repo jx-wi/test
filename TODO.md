@@ -232,30 +232,34 @@ nix.conf):**
 - Docs: README (option/env/In-VM-nix), design §3.11 L2 (flipped to "experimental, in progress" with the
   done/remaining split), CLAUDE.md deliberate-defaults bullet, home-manager option description.
 
-**THE REMAINING CRUX (spike on the Nix+KVM box before claiming #15 done):** the chroot store substitutes
-only if its DB (`/nix/.host-store/nix/var/nix/db`) reports the host paths VALID — that DB is **not
-populated yet**, so today the mount + substituter are wired but won't actually avoid rebuilds. Two
-mechanisms to spike + pick:
-- **(a) mount host `/nix/var/nix/db` ro too** (add a second ro 9p share in the wrapper + bind it under the
-  chroot root). Simplest, BUT the host's live sqlite DB is WAL-mode and a ro-mounted WAL DB can refuse to
-  open without `immutable=1` — verify nix opens substituter DBs read-only/immutable.
-- **(b) stage `nix-store --dump-db` reginfo at launch** → `nix-store --load-db` into a writable (tmpfs) DB
-  at the chroot root's `nix/var/nix/db`. Avoids live-DB contention; cost is the dump at launch (perf/perms
-  to check — wrapper runs as the non-root host user).
-Also confirm: a `local?root=…` chroot store keeps logical storeDir `/nix/store` (so paths match the guest
-store and substitution actually hits). Quick spike on the box, e.g.:
-```sh
-# does a chroot store preserve /nix/store logical paths + substitute from the host store?
-T=$(mktemp -d); P=$(nix-build '<nixpkgs>' -A hello --no-out-link)
-nix copy --no-check-sigs --to "local?root=$T" "$P" && ls "$T/nix/store" | head   # Q: paths under $T/nix/store?
-nix path-info --store "local?root=$T" "$P"                                       # Q: valid in the chroot store?
-```
-Once (a)/(b) works: drop the "experimental" wording, add a boot.sh assertion that a host-realised path
-substitutes (no rebuild), and flip design §3.11 L2 to "implemented".
+**THE DB CRUX — RESOLVED via spike (2026-06-07): option (b) reginfo.** Spike on the Nix box settled it:
+- **(a) ro-mount the host `/nix/var/nix/db`** → **FAILS**: a chroot store must WRITE its lock file to open
+  the DB (`error: opening lock file ".../big-lock": Permission denied`). A read-only DB mount is a dead end.
+- **(b) stage `nix-store --dump-db` reginfo → `--load-db` into a writable DB** → **WORKS**: `nix path-info
+  --store local?root=$HR <hostpath>` reports valid and `nix-store --dump` reads the NAR (i.e. it
+  substitutes). Dump is ~19 MB / ~2 s on a typical dev store. `local?root=…` confirmed to keep logical
+  storeDir `/nix/store` (path-info returned the real `/nix/store/…` path), so guest paths match.
 
-**Verify (Nix+KVM):** `nix flake check` clean + `bash tests/boot.sh` (now with the `nixCache` posture —
-should be 34/34: 31 + 3 host-cache) + a real `CCVM_NIX_HOST_CACHE=1 nix.enable` run showing the substituter
-in `nix.conf` and (after the DB piece) a host path copied instead of rebuilt.
+**Implemented (option b) on the working tree:**
+- Wrapper: in the host-store block, after the marker, `command -v nix-store && nix-store --dump-db
+  >seed/nix-store-db` (best-effort; warns if no host nix-store — store still mounts but won't substitute).
+- `guest/launcher.nix`: after mounting the ro store at `/nix/.host-store/nix/store`, `mkdir
+  /nix/.host-store/nix/var/nix/db` (tmpfs, writable) + `nix-store --store local?root=/nix/.host-store
+  --load-db <seed/nix-store-db`. Added `config.nix.package` to the seed service's runtimeInputs **gated on
+  cfg.nix.enable** (nix is already in the closure then → ~no cost; default stays lean).
+- `guest/default.nix`: substituter comment updated (DB now loaded from reginfo).
+- Tests: `stub-claude.sh` adds `HOSTCACHE:db-valid` (queries `nix path-info --store local?root=… <a path
+  from the ro mount>`); `boot.sh` asserts it (the real "it will substitute" check). host.sh §13 unchanged
+  (3 assertions; reginfo staging is gated on host nix-store, absent here, so it stays env-independent).
+- Docs flipped to "implemented (reginfo)": README, design §3.11 L2 (with the spike result), CLAUDE.md,
+  home-manager option desc.
+
+**REMAINING — final KVM confirmation only:** `nix flake check` clean + `bash tests/boot.sh` with the
+`nixCache` posture green **35/35** (31 + 4 host-cache: mounted, readonly, configured, db-valid). The
+guest-side reginfo `--load-db` (nix-store in the seed-service path, load-db as root into the chroot store,
+9p store read during path-info) is the one part not exercisable host-side — confirm `HOSTCACHE:db-valid`
+passes. Then #15 is fully done. (Optional nice-to-have after: a real `nix build` of a host-realised path
+showing a copy, not a rebuild — the human/`--shell` check.)
 
 ---
 
