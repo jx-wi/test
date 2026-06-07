@@ -26,7 +26,10 @@ half-remembered context.
 
 - **Branch `main` only** (no git remote yet — every commit is local; the user adds the remote
   on the host when ready, see #5). Done & committed:
-  **#1, #2, #3, #4, #5, #6, #7, #8, #9, #10(A+B), #11, #12.** Recent commits (newest first):
+  **#1–#13, #10(A+B+C), #14, #15** — i.e. the entire pre-public list is now clear (all KVM-verified).
+  **#14** = internal `nixInVm`→`nix.enable` rename (boot.sh 31/31). **#15** = `nix.useHostStoreAsCache`
+  (host store as a ro build substituter via a `db.sqlite` copy; boot.sh 35/35, `HOSTCACHE:db-valid`).
+  Earlier recent commits (newest first):
   - `961f967` #10-B nixInVm (writable /nix/store overlay + in-VM nix; KVM-verified `nix build` works)
   - `d1bedcf` #10 storeDisk→vmDiskSize rename (single ephemeral disk pool, int GiB)
   - `b6efaee` #10-A storeDisk (encrypted ephemeral /scratch; renamed by d1bedcf)
@@ -203,13 +206,19 @@ hits (only historical TODO mentions).
 
 ---
 
-## 🟡 #15 Implement `useHostStoreAsCache` — host store as a read-only build substituter (design §3.11 L2)
+## ✅ #15 Implement `useHostStoreAsCache` — host store as a read-only build substituter — DONE & KVM-VERIFIED 2026-06-07 (committed)
 
-**Status (2026-06-07): DB mechanism settled (copy `db.sqlite`); fully implemented on the working tree +
-host-verified (host.sh 49/49); needs a final KVM `tests/boot.sh nixCache` run (35/35) to confirm the
-guest-side DB copy + that it doesn't slow boot.** The store-mount/substituter half was already
-KVM-verified 34/34; the DB-copy half is the new, KVM-unverified piece. See "THE DB CRUX" below for the
-3-round spike/boot saga (ro-mount ✗, load-db blocks boot ✗, overlay needs root ✗, copy ✓).
+**Status: DONE & KVM-VERIFIED 2026-06-07.** `nix flake check` clean + `bash tests/boot.sh` **35/35**,
+including all four `hostStoreCache` assertions: host store mounted, mount READ-ONLY, substituter in
+`nix.conf`, and **`HOSTCACHE:db-valid`** (a host store path is valid via the chroot store → nix will
+substitute it, not rebuild). Boot succeeded — the `db.sqlite` copy is fast enough to not block sshd.
+host.sh 49/49 here, tokens 20/20. DB mechanism = **copy `db.sqlite`** (see "THE DB CRUX" for the
+3-round spike/boot saga: ro-mount ✗, load-db blocks boot ✗, overlay needs root ✗, copy ✓).
+
+**Optional follow-up (not blocking, nice-to-have):** a human `--shell` check — `CCVM_NIX_HOST_CACHE=1`
+with `nix.enable`, run a real `nix build` of a host-realised path and confirm it *copies* from the cache
+rather than rebuilding/refetching (db-valid already proves the path is substitutable, so this is extra
+confidence, not a correctness gate).
 
 **Done & verified here (host-side, 49/49 host.sh):**
 - Wrapper (`wrapper/ccvm.sh`): baked `HOSTSTORECACHE="@HOSTSTORECACHE@"` + `CCVM_NIX_HOST_CACHE` per-run

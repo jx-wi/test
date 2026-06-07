@@ -482,8 +482,8 @@ default initrd carries only squashfs/overlay/9p). Verified by `nix flake check`,
 disk-backed upper.
 
 **Remaining follow-ons (not blocking — `nix develop` with a disk works today):**
-- **L2 — `nix.useHostStoreAsCache` (host store as a build substituter) — IMPLEMENTED (DB copy),
-  pending final KVM boot-test (2026-06-07).** The chosen mechanism is a read-only **substituter** (host
+- **L2 — `nix.useHostStoreAsCache` (host store as a build substituter) — IMPLEMENTED (DB copy) &
+  KVM-VERIFIED 2026-06-07.** The chosen mechanism is a read-only **substituter** (host
   store as a binary cache: nix copies the needed paths into the VM's own store and registers them as
   valid), *not* mounting the host store as the guest's `/nix/store` overlay lower. That overlay-lower
   approach was **considered and rejected**: a bare FS mount gives path *presence* but not nix **DB**
@@ -522,10 +522,10 @@ disk-backed upper.
   **Tests.** `host.sh` asserts the marker + that nothing secret is staged; `boot.sh` (the `nixCache`
   posture) asserts the host store is mounted **read-only**, the substituter is in `nix.conf`, and a
   host store path is reported **valid** via the chroot store (`HOSTCACHE:db-valid` — proves the DB copy
-  works and nix will substitute rather than rebuild). **Still to confirm on KVM:** the `nixCache` boot
-  posture green end-to-end (the guest-side DB copy/chown is the one part not exercisable host-side),
-  and that the `db.sqlite` copy in the seed service is fast enough to not delay boot (a flat copy,
-  unlike (b)'s replay — but verify).
+  works and nix will substitute rather than rebuild). **KVM-verified 2026-06-07:** `nix flake check`
+  clean + `bash tests/boot.sh` 35/35 (all four `hostStoreCache` assertions), and boot succeeded — the
+  `db.sqlite` copy in the seed service is fast enough not to delay sshd (the (b) replay was the slow
+  part, now gone).
 
 **Tests as established:** `host.sh` host-side staging in `nix flake check`; `boot.nix` postures
 (`scratch` for the disk, `nix` for in-VM nix) + `stub-claude.sh` reports (`SCRATCH:*`,
