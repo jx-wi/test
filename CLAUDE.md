@@ -56,7 +56,7 @@ These are the whole point of the project. Treat any change that weakens one as a
   `rm` as belt-and-suspenders. The host image MUST live in a disk-backed dir, never tmpfs/`$TMP`
   (that would put the "disk" back in RAM) — the wrapper refuses a tmpfs target unless
   `CCVM_SCRATCH_ALLOW_TMPFS=1`. The pool backs only **bulk, non-secret** data — `/scratch` and (with
-  `nixInVm`) the writable `/nix/store` overlay upper, opened+mounted in the **initrd** by a fail-open
+  `nix.enable`) the writable `/nix/store` overlay upper, opened+mounted in the **initrd** by a fail-open
   LUKS oneshot (key still guest-only). Keep `/home`/secrets in tmpfs. Never stage the key through the seed.
 - **`autoUpdateFiles=false` means genuinely read-only.** The host tree is the 9p **lower**;
   edits land in a tmpfs **upper** and must not reach the host.
@@ -72,9 +72,9 @@ These are the whole point of the project. Treat any change that weakens one as a
 - **RAM-only is the default; the disk pool and in-VM nix are opt-in.** `vmDiskSize=0` (no disk,
   pure RAM) and `nix.enable=false` (read-only `/nix/store`, no in-VM nix, lean closure) are the
   defaults — keep boot fast and the no-disk stance unless asked. The user-facing option is
-  `programs.ccvm.nix.enable`; it maps to the guest/internal build-time flag still named `nixInVm`
-  (the guest closure + `lib/mkccvm.nix` use that name — don't rename it without a guest rebuild).
-  It is **build-time** (it flips `nix.enable` and rebuilds the store as a writable overlay in the
+  `programs.ccvm.nix.enable`; the internal config + guest module use the **same** nested `nix.enable`
+  name end to end (the old internal `nixInVm` flag was unified away — `lib/mkccvm.nix` passes the whole
+  `nix` attr through). It is **build-time** (it flips `nix.enable` and rebuilds the store as a writable overlay in the
   initrd) — never try to make it a runtime `CCVM_*` env var. Its overlay upper is tmpfs (RAM) by
   default; combine with `vmDiskSize>0` and an initrd LUKS oneshot relocates that upper onto the
   encrypted disk (fail-open to tmpfs), so a large `nix develop` doesn't OOM guest RAM — one shared

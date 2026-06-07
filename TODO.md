@@ -107,7 +107,40 @@ rename so `nixInVm` disappears internally too; (15) actually implement `useHostS
 
 ---
 
-## ⬜ #14 Finish the rename: internal `nixInVm` → `nix.enable` everywhere (one name)
+## 🟡 #14 Finish the rename: internal `nixInVm` → `nix.enable` everywhere — DONE on working tree, KVM-verify pending
+
+**Status (2026-06-07):** implemented on the working tree (NOT yet committed pending the note below).
+Took the **deep-merge route**, but with a safer merge than the TODO originally recommended: instead of
+`lib.recursiveUpdate` (which recurses into *any* two attrsets — and `package` defaults to a derivation,
+i.e. an attrset, so it would silently deep-merge two derivations into a broken Frankenstein), `lib/mkccvm.nix`
+does `(defaults // userConfig) // { nix = defaults.nix // (userConfig.nix or {}); }` — a targeted one-level
+merge of just the nested `nix` attr (whose children are all scalars). Same correctness (a caller passing
+`nix = { enable = true; }` keeps `useHostStoreAsCache`), none of the derivation-merge hazard.
+
+**Files changed:** `lib/defaults.nix` (flat `nixInVm`/`useHostStoreAsCache` → nested `nix = { enable;
+useHostStoreAsCache; }`), `lib/mkccvm.nix` (the targeted merge + `inherit (config) nix` into the guest eval
++ `lib.warnIf config.nix.useHostStoreAsCache`), `guest/default.nix` (nested `options.ccvm.nix = { enable;
+useHostStoreAsCache; }`; every `cfg.nixInVm` → `cfg.nix.enable`; comments), `modules/home-manager.nix`
+(`inherit (cfg) … nix;` — no more `nixInVm =`/`useHostStoreAsCache` mapping; option defaults read
+`defaults.nix.{enable,useHostStoreAsCache}`), `tests/boot.nix` (`nix.enable = true` for both the `nix` and
+`nixDisk` postures), `tests/boot.sh` + `tests/stub-claude.sh` (assertion labels `nixInVm:`/`nixInVm+disk:`
+→ `nix.enable:`/`nix.enable+disk:`), `guest/launcher.nix` (comments), docs (CLAUDE.md, design §3.11 naming
+note flipped to "one name end to end", README already on `nix.enable`).
+
+**Verified here:** `bash -n` clean (test scripts + substituted wrapper); `host.sh` **46/46** via the dry-run
+recipe (the wrapper + `tests/default.nix` are untouched — `nixInVm` was never a `@TOKEN@`, so host-side is
+genuinely unaffected); token balance still **19/19**; `grep -rn nixInVm` returns only TWO intentional doc
+mentions (CLAUDE.md + a home-manager comment) explaining that the name was unified away, plus historical
+TODO mentions — **zero code hits**.
+
+**STILL TO VERIFY on the Nix+KVM box (the only thing left for #14):** `nix flake check` clean + `bash
+tests/boot.sh` 31/31 (now printing `nix.enable:` labels). This is a pure rename/refactor with no behavior
+change, but it touches the guest closure (the nested guest option + the mkccvm merge), so Nix eval and a
+real boot must confirm it on a capable box before #14 is claimed fully done.
+
+---
+
+### Original brief (for reference)
 
 **Goal (user ask):** after #13 there are TWO names for one thing — the public option is
 `programs.ccvm.nix.enable`, but the guest/internal build-time flag is still `nixInVm`, which leaks

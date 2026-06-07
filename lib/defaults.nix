@@ -11,8 +11,10 @@
   memory = 4096; # guest RAM in MiB (runtime QEMU arg; CCVM_MEMORY overrides per run)
   cores = 4; # guest vCPUs
   extraPackages = [ ]; # extra toolchains available inside the VM (a base set is always present)
-  nixInVm = false; # build-time: enable in-VM nix (writable /nix/store overlay + nix.enable). User-facing: programs.ccvm.nix.enable
-  useHostStoreAsCache = false; # programs.ccvm.nix.useHostStoreAsCache — host store as a build substituter. DECLARED but not implemented yet (design §3.11 L2)
+  nix = {
+    enable = false; # build-time: enable in-VM nix (writable /nix/store overlay + nix.enable). User-facing: programs.ccvm.nix.enable
+    useHostStoreAsCache = false; # host store as a build substituter. DECLARED but not implemented yet (design §3.11 L2)
+  };
   apiKeyVariable = "ANTHROPIC_API_KEY"; # host env var carrying the key (rides SendEnv only)
   shareClaudeConfig = true; # reuse the host ~/.claude (login/settings/memory), read-only
   persistClaudeProjects = false; # persist ~/.claude/projects back to the host (resume + memory)

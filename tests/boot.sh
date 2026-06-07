@@ -128,7 +128,7 @@ grep -qa '^CLAUDEMD:blurb$' <<<"$OUT" &&
   ok "claude-md: the ccvm-context blurb survived into the guest" || no "claude-md: blurb missing"
 grep -qa '^CLAUDEMD:mode-rw$' <<<"$OUT" &&
   ok "claude-md: rw-mode 'edits are live' note present in the guest" || no "claude-md: rw mode note missing"
-# Default (nixInVm off): the store stays read-only and nix is absent — the lean default posture.
+# Default (nix.enable off): the store stays read-only and nix is absent — the lean default posture.
 grep -qa '^STORE:readonly$' <<<"$OUT" &&
   ok "default: /nix/store is read-only (no in-VM nix)" ||
   no "default: /nix/store not read-only: $(grep -a '^STORE:' <<<"$OUT")"
@@ -181,7 +181,7 @@ grep -qa '^SCRATCH:encrypted$' <<<"$OUT" &&
   no "vmDiskSize: disk image left behind after exit"
 rm -rf "$PROJ_SC" "$SCRATCH_TMP"
 
-# ---- nixInVm: /nix/store is a writable overlay + nix is present -------------
+# ---- nix.enable: /nix/store is a writable overlay + nix is present -------------
 # The guest is built with nix.enable and a writable /nix/store overlay (ro store lower + tmpfs
 # upper, set up in the initrd). We can't do a full `nix build` here without leaning on the
 # network/cache, so assert the structural guarantees: the store is an overlayfs (not the ro
@@ -189,13 +189,13 @@ rm -rf "$PROJ_SC" "$SCRATCH_TMP"
 PROJ_NIX="$(mktemp -d)"
 OUT="$(run_capture "$WRAP_NIX" "$PROJ_NIX")"
 grep -qa '^STORE:overlay$' <<<"$OUT" &&
-  ok "nixInVm: /nix/store is a writable overlay (ro lower + tmpfs upper)" ||
-  no "nixInVm: /nix/store not an overlay: $(grep -a '^STORE:' <<<"$OUT")"
+  ok "nix.enable: /nix/store is a writable overlay (ro lower + tmpfs upper)" ||
+  no "nix.enable: /nix/store not an overlay: $(grep -a '^STORE:' <<<"$OUT")"
 grep -qa '^NIX:present$' <<<"$OUT" &&
-  ok "nixInVm: nix is available in the guest" || no "nixInVm: nix not on PATH"
+  ok "nix.enable: nix is available in the guest" || no "nix.enable: nix not on PATH"
 rm -rf "$PROJ_NIX"
 
-# ---- nixInVm + vmDiskSize: the overlay upper is backed by the encrypted disk ----
+# ---- nix.enable + vmDiskSize: the overlay upper is backed by the encrypted disk ----
 # Both features on: the INITRD LUKS-opens the disk and mounts it as the /nix/store overlay UPPER
 # (/nix/.rw-store) instead of tmpfs, so a multi-GB closure doesn't OOM RAM — and /scratch shares
 # that same pool. Assert: store is still an overlay, nix present, the upper is a dm-crypt ext4 (NOT
@@ -204,21 +204,21 @@ PROJ_ND="$(mktemp -d)"
 ND_TMP="$(mktemp -d)"
 OUT="$(CCVM_SCRATCH_DIR="$ND_TMP" CCVM_SCRATCH_ALLOW_TMPFS=1 run_capture "$WRAP_NIXDISK" "$PROJ_ND")"
 grep -qa '^STORE:overlay$' <<<"$OUT" &&
-  ok "nixInVm+disk: /nix/store is still a writable overlay" ||
-  no "nixInVm+disk: /nix/store not an overlay: $(grep -a '^STORE:' <<<"$OUT")"
+  ok "nix.enable+disk: /nix/store is still a writable overlay" ||
+  no "nix.enable+disk: /nix/store not an overlay: $(grep -a '^STORE:' <<<"$OUT")"
 grep -qa '^NIX:present$' <<<"$OUT" &&
-  ok "nixInVm+disk: nix is available in the guest" || no "nixInVm+disk: nix not on PATH"
+  ok "nix.enable+disk: nix is available in the guest" || no "nix.enable+disk: nix not on PATH"
 grep -qa '^RWSTORE:disk$' <<<"$OUT" &&
-  ok "nixInVm+disk: overlay upper is disk-backed ext4 (not tmpfs/RAM)" ||
-  no "nixInVm+disk: overlay upper not disk-backed (fell open to tmpfs?): $(grep -a '^RWSTORE:' <<<"$OUT")"
+  ok "nix.enable+disk: overlay upper is disk-backed ext4 (not tmpfs/RAM)" ||
+  no "nix.enable+disk: overlay upper not disk-backed (fell open to tmpfs?): $(grep -a '^RWSTORE:' <<<"$OUT")"
 grep -qa '^RWSTORE:encrypted$' <<<"$OUT" &&
-  ok "nixInVm+disk: overlay upper sits on a dm-crypt (LUKS) device" ||
-  no "nixInVm+disk: overlay upper not on a dm-crypt device (host could read plaintext)"
+  ok "nix.enable+disk: overlay upper sits on a dm-crypt (LUKS) device" ||
+  no "nix.enable+disk: overlay upper not on a dm-crypt device (host could read plaintext)"
 grep -qa '^SCRATCH:mounted$' <<<"$OUT" &&
-  ok "nixInVm+disk: /scratch shares the same disk pool" ||
-  no "nixInVm+disk: /scratch not mounted: $(grep -a '^SCRATCH:' <<<"$OUT")"
+  ok "nix.enable+disk: /scratch shares the same disk pool" ||
+  no "nix.enable+disk: /scratch not mounted: $(grep -a '^SCRATCH:' <<<"$OUT")"
 grep -qa '^SCRATCH:writable$' <<<"$OUT" &&
-  ok "nixInVm+disk: /scratch is writable by the agent" || no "nixInVm+disk: /scratch not writable"
+  ok "nix.enable+disk: /scratch is writable by the agent" || no "nix.enable+disk: /scratch not writable"
 rm -rf "$PROJ_ND" "$ND_TMP"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"

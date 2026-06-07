@@ -14,10 +14,10 @@ let
     inherit (cfg)
       package autoUpdateFiles memory cores extraPackages
       apiKeyVariable shareClaudeConfig persistClaudeProjects shareGitConfig extraClaudeMd
-      lockGuestMemory vmDiskSize egressAllowlist egressPorts extraGuestModules;
-    # User-facing nesting (programs.ccvm.nix.*) -> the flat internal config keys mkccvm/the guest use.
-    nixInVm = cfg.nix.enable;
-    inherit (cfg.nix) useHostStoreAsCache;
+      lockGuestMemory vmDiskSize egressAllowlist egressPorts extraGuestModules
+      # programs.ccvm.nix.{enable,useHostStoreAsCache} passes straight through — the internal
+      # config and the guest use the SAME nested `nix` name (no nixInVm mapping anymore).
+      nix;
   }).wrapper;
 in
 {
@@ -68,7 +68,7 @@ in
     nix = {
       enable = lib.mkOption {
         type = lib.types.bool;
-        default = defaults.nixInVm;
+        default = defaults.nix.enable;
         description = ''
           Enable a usable `nix` inside the VM (in-VM `nix develop`/`nix build`). Off by default —
           the default guest is RAM-only with a read-only /nix/store. When on, the guest is built with
@@ -83,7 +83,7 @@ in
 
       useHostStoreAsCache = lib.mkOption {
         type = lib.types.bool;
-        default = defaults.useHostStoreAsCache;
+        default = defaults.nix.useHostStoreAsCache;
         description = ''
           Reuse the host's /nix/store to accelerate in-VM builds by registering it as a build
           substituter (binary cache), so paths the host has already realised are copied into the

@@ -168,7 +168,7 @@ let
       # Opt-in encrypted ephemeral disk pool (vmDiskSize). The host attached a raw SPARSE virtio-blk
       # disk with serial=ccvm-scratch (so it resolves at /dev/disk/by-id/virtio-ccvm-scratch
       # regardless of /dev ordering). Two cases below, depending on whether the INITRD already
-      # claimed the disk for the nixInVm /nix/store overlay upper (storeDiskScript, guest/default.nix):
+      # claimed the disk for the nix.enable /nix/store overlay upper (storeDiskScript, guest/default.nix):
       # it did (marker present) -> SHARE that pool; it didn't -> this service OWNS the disk and formats
       # a standalone /scratch. Invariants common to both, however the disk gets opened:
       #   * the LUKS key is generated in GUEST RAM and never crosses 9p — the host only ever sees
@@ -178,7 +178,7 @@ let
       #   * FAIL-OPEN throughout — any hiccup logs and continues WITHOUT /scratch (the agent still has
       #     tmpfs); it must never fail this oneshot and block sshd.
       if [ -f "$seed/vm-disk" ] && [ -e /run/ccvm-store-on-disk ]; then
-        # nixInVm + vmDiskSize: the INITRD already LUKS-opened the disk and mounted it as the
+        # nix.enable + vmDiskSize: the INITRD already LUKS-opened the disk and mounted it as the
         # /nix/store overlay upper at /nix/.rw-store (marker /run/ccvm-store-on-disk, preserved
         # across switch-root). Don't reformat — SHARE that one pool: bind its scratch/ subdir to
         # /scratch. Fail-open: a hiccup just leaves the agent without /scratch (it still has tmpfs).
@@ -190,7 +190,7 @@ let
           echo "ccvm: scratch: bind to the shared disk pool failed; continuing without /scratch" >&2
         fi
       elif [ -f "$seed/vm-disk" ]; then
-        # STANDALONE (nixInVm off, or the initrd backing failed open): this service owns the disk, so
+        # STANDALONE (nix.enable off, or the initrd backing failed open): this service owns the disk, so
         # LUKS-format it FRESH every boot, open it, lay an ext4, and mount it at /scratch. A LUKS
         # header needs a few MiB so the host caps the size; pbkdf2 keeps luksFormat fast (the key is
         # already 64 random bytes, so a memory-hard KDF would only slow boot — especially under TCG).

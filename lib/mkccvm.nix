@@ -20,7 +20,15 @@ let
 in
 userConfig:
 let
-  config = defaults // userConfig;
+  # Shallow-merge the top level, then deep-merge the one nested attr (`nix`) so a caller passing
+  # `nix = { enable = true; }` keeps the other `nix.*` defaults instead of replacing the whole attr.
+  # NB: deliberately NOT lib.recursiveUpdate — it recurses into *any* two attrsets, and `package`
+  # defaults to a derivation (which IS an attrset), so recursiveUpdate would silently deep-merge two
+  # derivations into a broken Frankenstein. A targeted one-level merge of `nix` (whose children are
+  # all scalars) is both safe and exactly what's needed.
+  config = (defaults // userConfig) // {
+    nix = defaults.nix // (userConfig.nix or { });
+  };
   system = pkgs.stdenv.hostPlatform.system;
 
   # The wrapper is arch-specific: pick the matching qemu-system binary and a default
@@ -37,7 +45,7 @@ let
       {
         nixpkgs.pkgs = pkgs;
         ccvm = {
-          inherit (config) apiKeyVariable extraPackages nixInVm;
+          inherit (config) apiKeyVariable extraPackages nix;
           claudePackage = config.package;
         };
       }
@@ -87,7 +95,7 @@ let
   # register the host /nix/store as a substituter so in-VM `nix build`/`nix develop` reuse host-
   # built paths). The user-facing option is final so it won't churn after going public, but it has
   # no effect yet — warn loudly at eval time rather than silently no-op, so nobody assumes it works.
-  wrapper = lib.warnIf config.useHostStoreAsCache
+  wrapper = lib.warnIf config.nix.useHostStoreAsCache
     "ccvm: programs.ccvm.nix.useHostStoreAsCache is not implemented yet (host-store substituter / build-cache, design §3.11 L2) — it currently has NO effect. Tracking in TODO.md #10."
     (pkgs.writeShellApplication {
     name = "ccvm";

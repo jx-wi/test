@@ -60,7 +60,7 @@ else
   echo "SCRATCH:absent"
 fi
 
-# nixInVm: with it on, /nix/store should be a writable overlay (overlayfs) and `nix` present;
+# nix.enable: with it on, /nix/store should be a writable overlay (overlayfs) and `nix` present;
 # off (the default), /nix/store stays the read-only squashfs/9p. Report the store fs type and
 # whether nix is on PATH so boot.sh can assert per posture. stat -f is coreutils (always present).
 case "$(stat -f -c %T /nix/store 2>/dev/null)" in
@@ -70,7 +70,7 @@ case "$(stat -f -c %T /nix/store 2>/dev/null)" in
 esac
 command -v nix >/dev/null 2>&1 && echo "NIX:present" || echo "NIX:absent"
 
-# nixInVm + vmDiskSize: the initrd should back the overlay UPPER (/nix/.rw-store) with the
+# nix.enable + vmDiskSize: the initrd should back the overlay UPPER (/nix/.rw-store) with the
 # encrypted disk instead of tmpfs. Report its fstype (ext4 = disk-backed, tmpfs = RAM/fail-open)
 # and whether it sits on a dm-crypt device, so boot.sh can assert the disk-backed-upper posture.
 if [ -d /nix/.rw-store ]; then

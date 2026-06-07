@@ -350,20 +350,21 @@ egress *anonymization* (how those packets reach the wire) belongs on the host.
 ### 3.11 Encrypted disk pool (`vmDiskSize`) + in-VM nix (`nix.enable`)
 
 > **Naming note.** The user-facing option is `programs.ccvm.nix.enable` (with a sibling
-> `nix.useHostStoreAsCache`, §"Remaining follow-ons"). The guest/internal build-time flag this maps
-> to is still called `nixInVm` throughout the guest closure (`guest/default.nix`, `lib/mkccvm.nix`) —
-> the references to `nixInVm` below describe that internal mechanism.
+> `nix.useHostStoreAsCache`, §"Remaining follow-ons"). This is now **one name end to end**: the
+> internal config (`lib/defaults.nix`, `lib/mkccvm.nix`) and the guest module (`guest/default.nix`,
+> as `ccvm.nix.enable`) use the same nested `nix.enable` — the old internal `nix.enable` flag was unified
+> away. References to `nix.enable` below mean both the option and the internal mechanism.
 
 > **Status: both shipped & KVM-verified (2026-06-06).** Two opt-in, off-by-default features came out
 > of this design: **`vmDiskSize`** — an encrypted, ephemeral disk pool (key generated in guest RAM,
-> host sees only ciphertext, wiped on exit) mounted at `/scratch`; and **`nixInVm`** — a writable
+> host sees only ciphertext, wiped on exit) mounted at `/scratch`; and **`nix.enable`** — a writable
 > `/nix/store` overlay + `nix.enable` so in-VM `nix develop`/`nix build` work. Verified end to end:
 > `nix flake check` clean, `tests/boot.sh` 25/25, a real `vmDiskSize` run showed `/scratch` as a
 > dm-crypt mount, and a real in-VM `nix build nixpkgs#hello` worked with the realised path **gone on
 > the host after exit**. Two refinements landed during implementation that the plan below predates:
 > the LUKS format uses a fast **pbkdf2** (the key is already 64 random bytes, so a memory-hard KDF
 > would only slow boot for no security gain), and a tmpfs image dir is **refused** unless
-> `CCVM_SCRATCH_ALLOW_TMPFS=1`. The last piece — wiring the two together so the `nixInVm` overlay
+> `CCVM_SCRATCH_ALLOW_TMPFS=1`. The last piece — wiring the two together so the `nix.enable` overlay
 > *upper* is backed by the `vmDiskSize` disk instead of tmpfs — is now **DONE & KVM-verified
 > (2026-06-07)**: an initrd LUKS oneshot, fail-open to tmpfs, one shared encrypted pool for the
 > store upper and `/scratch`. See "Disk-backed upper" under "Remaining follow-ons" below.
@@ -443,7 +444,7 @@ the tmpfs guard, sparse `truncate`, `virtio-blk` with `serial=ccvm-scratch` (sta
 guest seed-service LUKS-format/open/mkfs/mount with fail-open. `/home` and root stay tmpfs.
 
 **Increment B — writable `/nix/store` overlay + in-VM `nix` — DONE & KVM-VERIFIED (2026-06-06).**
-The `nixInVm` option (build-time, default off — it rebuilds the guest with `nix.enable` and changes
+The `nix.enable` option (build-time, default off — it rebuilds the guest with `nix.enable` and changes
 the store mount, so it can't be a runtime env var) makes `/nix/store` a **writable overlay**: the
 read-only store image as the lower (`/nix/.ro-store`), a writable upper, declarative
 `fileSystems.overlay` at `/nix/store`. This turned out far simpler than feared: the declarative
@@ -456,11 +457,11 @@ on the host after exit** (it lived only in the tmpfs upper — ephemeral guarant
 no store-DB registration (nix builds/substitutes fresh into the upper rather than reusing baked
 paths — a later optimization), tmpfs upper only.
 
-**Disk-backed upper — DONE & KVM-verified (2026-06-07).** When `nixInVm` and `vmDiskSize > 0` are
+**Disk-backed upper — DONE & KVM-verified (2026-06-07).** When `nix.enable` and `vmDiskSize > 0` are
 both on, the overlay upper (`/nix/.rw-store`) is backed by the encrypted disk instead of tmpfs, so a
 large `nix develop` doesn't exhaust guest RAM. This is the LUKS-in-initrd work originally feared here:
 the disk must be opened and mounted before the store is assembled, so it runs as a **systemd-initrd**
-oneshot (`ccvm-store-disk`, gated on `nixInVm`). The shape chosen for low brick-risk is
+oneshot (`ccvm-store-disk`, gated on `nix.enable`). The shape chosen for low brick-risk is
 **mount-stacking with fail-open**: the declarative tmpfs `/nix/.rw-store` still mounts first (it is
 the baseline), then — if the disk is present — the service `luksFormat`/`open`/`mkfs.ext4`s it and
 mounts it *over* that tmpfs, so the overlay's `upperdir` lands on disk; the overlay config is
@@ -472,7 +473,7 @@ disk is a single shared **pool**: on success the initrd writes `/run/ccvm-store-
 preserves `/run` across switch-root), and the post-boot seed service, seeing that marker, binds
 `/nix/.rw-store/scratch` to `/scratch` rather than re-formatting a second disk (`lsblk` confirms one
 `ccvm-scratch` crypt device backing both). Three things the *default* initrd lacks had to be added,
-all `nixInVm`-gated: a `udevadm settle` before probing (the scratch disk is undeclared, so only the
+all `nix.enable`-gated: a `udevadm settle` before probing (the scratch disk is undeclared, so only the
 store disk is waited for and the scratch `by-id` link lags); `cryptsetup` + `e2fsprogs` listed in
 `boot.initrd.systemd.storePaths` *directly* (a script's transitive references are not pulled into the
 initrd — referencing them only via `PATH` yields `command not found`); and the `ext4` module (the

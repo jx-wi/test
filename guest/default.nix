@@ -12,7 +12,7 @@
 let
   cfg = config.ccvm;
 
-  # INITRD oneshot (nixInVm only): back the writable /nix/store overlay UPPER (/nix/.rw-store) with
+  # INITRD oneshot (nix.enable only): back the writable /nix/store overlay UPPER (/nix/.rw-store) with
   # the opt-in vmDiskSize encrypted disk instead of tmpfs, so a multi-GB `nix develop` doesn't OOM
   # guest RAM. It must run in the INITRD because /nix/store is neededForBoot — the overlay and its
   # upper are assembled before switch-root, so the post-boot seed service (which LUKS-es the disk
@@ -108,16 +108,29 @@ in
     # flag (read by launcher.nix), NOT by a guest option — so there is deliberately no
     # `shareClaudeConfig` option here. The host-side default lives in lib/mkccvm.nix and is
     # baked into the wrapper as @SHARECLAUDE@.
-    nixInVm = lib.mkOption {
-      type = lib.types.bool;
-      default = false;
-      description = ''
-        Enable in-VM nix: a writable /nix/store overlay (read-only store image as the lower, a
-        tmpfs upper) plus nix.enable, so `nix develop`/`nix build` work inside the guest. The
-        upper is RAM (tmpfs) by default; combine with vmDiskSize > 0 and the initrd backs the
-        upper with the encrypted disk instead (fail-open to tmpfs), so a multi-GB closure does
-        not OOM guest RAM.
-      '';
+    # Internal build-time nix config. The user-facing home-manager surface (programs.ccvm.nix.*)
+    # nests the same way and maps straight onto these — one name end to end (see lib/mkccvm.nix).
+    nix = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Enable in-VM nix: a writable /nix/store overlay (read-only store image as the lower, a
+          tmpfs upper) plus nix.enable, so `nix develop`/`nix build` work inside the guest. The
+          upper is RAM (tmpfs) by default; combine with vmDiskSize > 0 and the initrd backs the
+          upper with the encrypted disk instead (fail-open to tmpfs), so a multi-GB closure does
+          not OOM guest RAM.
+        '';
+      };
+      useHostStoreAsCache = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Reuse the host /nix/store as a read-only build substituter. DECLARED but not implemented
+          yet (design §3.11 L2); has no effect in the guest today. Declared here so mkccvm can pass
+          the whole nested `nix` attr through verbatim.
+        '';
+      };
     };
   };
 
@@ -145,26 +158,26 @@ in
       "overlay"
       "erofs"
     ]
-    # nixInVm only: device-mapper + dm-crypt + the LUKS cipher modules + ext4, so the initrd can
+    # nix.enable only: device-mapper + dm-crypt + the LUKS cipher modules + ext4, so the initrd can
     # LUKS-open AND mount the encrypted vmDiskSize disk as the /nix/store overlay upper
     # (storeDiskScript). cryptoModules is NixOS's own arch-appropriate set (aes/xts/sha/…), the same
     # list the luks module uses; ext4 pulls its deps (jbd2/mbcache/crc32c) via the module closure —
     # the default initrd only carries squashfs/overlay/9p, so without this `mount` reports "unknown
     # filesystem type 'ext4'". Gated so the default (RAM-only) initrd stays lean. The post-boot
-    # /scratch path (vmDiskSize without nixInVm) uses the running-system modules below instead.
-    ++ lib.optionals cfg.nixInVm ([ "dm_mod" "dm_crypt" "ext4" ] ++ config.boot.initrd.luks.cryptoModules);
+    # /scratch path (vmDiskSize without nix.enable) uses the running-system modules below instead.
+    ++ lib.optionals cfg.nix.enable ([ "dm_mod" "dm_crypt" "ext4" ] ++ config.boot.initrd.luks.cryptoModules);
     boot.initrd.kernelModules = [ "virtio_pci" "virtio_mmio" "virtio_blk" ]
-      ++ lib.optionals cfg.nixInVm ([ "dm_mod" "dm_crypt" "ext4" ] ++ config.boot.initrd.luks.cryptoModules);
+      ++ lib.optionals cfg.nix.enable ([ "dm_mod" "dm_crypt" "ext4" ] ++ config.boot.initrd.luks.cryptoModules);
     boot.initrd.checkJournalingFS = false;
 
     # device-mapper + dm-crypt for the opt-in encrypted disk pool (vmDiskSize). Loaded in the
     # running system because the post-boot seed service (guest/launcher.nix) LUKS-formats the disk
-    # for /scratch when nixInVm is OFF; harmless when vmDiskSize is off. (When nixInVm is on, the
+    # for /scratch when nix.enable is OFF; harmless when vmDiskSize is off. (When nix.enable is on, the
     # INITRD owns the disk instead — see storeDiskScript / boot.initrd above.) The aes/xts/sha
     # crypto the cipher needs is auto-loaded by the kernel crypto API when dm-crypt requests xts(aes).
     boot.kernelModules = [ "dm_mod" "dm_crypt" ];
 
-    # nixInVm only: pull the disk-backing initrd oneshot + its tools (cryptsetup, mkfs.ext4) into
+    # nix.enable only: pull the disk-backing initrd oneshot + its tools (cryptsetup, mkfs.ext4) into
     # the initrd, and order it AFTER the declarative tmpfs /nix/.rw-store mount (RequiresMountsFor)
     # but BEFORE the /nix/store overlay assembles (sysroot-nix-store.mount). See storeDiskScript for
     # the mount-stacking + fail-open rationale. wantedBy initrd.target so it's pulled into the boot
@@ -173,12 +186,12 @@ in
     # closure, so cryptsetup/mkfs.ext4 + their libs land in the initrd. Referencing them only via
     # the script's PATH is NOT enough — the script's transitive refs aren't pulled into the initrd,
     # so cryptsetup would be "command not found" (ENOENT on exec) at LUKS-format time.
-    boot.initrd.systemd.storePaths = lib.optionals cfg.nixInVm [
+    boot.initrd.systemd.storePaths = lib.optionals cfg.nix.enable [
       storeDiskScript
       pkgs.cryptsetup
       pkgs.e2fsprogs
     ];
-    boot.initrd.systemd.services.ccvm-store-disk = lib.mkIf cfg.nixInVm {
+    boot.initrd.systemd.services.ccvm-store-disk = lib.mkIf cfg.nix.enable {
       description = "Back the /nix/store overlay upper with the encrypted vmDiskSize disk (fail-open to tmpfs)";
       wantedBy = [ "initrd.target" ];
       before = [ "sysroot-nix-store.mount" "initrd-fs.target" ];
@@ -211,7 +224,7 @@ in
 
     # Filesystems: tmpfs root (RAM, discarded on power-off) + the read-only system closure. The
     # closure is always a self-contained squashfs on the first virtio-blk disk (max isolation —
-    # nothing of the host store is exposed). With nixInVm it becomes the overlay LOWER (at
+    # nothing of the host store is exposed). With nix.enable it becomes the overlay LOWER (at
     # /nix/.ro-store) under a writable /nix/store; without it (the lean default) it is /nix/store
     # directly, ro.
     fileSystems =
@@ -230,13 +243,13 @@ in
           neededForBoot = true;
         };
         storeFs =
-          if cfg.nixInVm then {
+          if cfg.nix.enable then {
             # Writable store: ro lower + writable upper, overlaid at /nix/store. The overlay is set
             # up in the initrd (store is neededForBoot). The upper (/nix/.rw-store) is tmpfs (RAM) by
             # default; when vmDiskSize > 0 the initrd's ccvm-store-disk service mounts the encrypted
             # disk OVER this tmpfs (fail-open) so the upper lands on disk — the overlay config here is
             # IDENTICAL either way (only what's mounted at /nix/.rw-store changes). nix realises new
-            # paths into the upper; wiped on exit. Off by default — this branch only exists when nixInVm is on.
+            # paths into the upper; wiped on exit. Off by default — this branch only exists when nix.enable is on.
             "/nix/.ro-store" = roStore;
             "/nix/.rw-store" = {
               device = "tmpfs";
@@ -370,10 +383,10 @@ in
     documentation.man.enable = false;
     documentation.nixos.enable = false;
     services.udisks2.enable = false;
-    # Mutable nix only when nixInVm is on (writable /nix/store overlay above). Off by default —
+    # Mutable nix only when nix.enable is on (writable /nix/store overlay above). Off by default —
     # the store is read-only, so the channel/daemon machinery is skipped and the closure stays lean.
-    nix.enable = cfg.nixInVm;
-    nix.settings = lib.mkIf cfg.nixInVm {
+    nix.enable = cfg.nix.enable;
+    nix.settings = lib.mkIf cfg.nix.enable {
       experimental-features = [ "nix-command" "flakes" ]; # `nix develop`/`nix build` on flakes
       trusted-users = [ "root" "ccvm" ]; # let the agent add substituters / build without sudo
     };
