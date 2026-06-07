@@ -176,7 +176,21 @@ let
       # tmpfs) — it must never fail this oneshot and block sshd. A LUKS header needs a few MiB, so
       # the host caps the size; we use a fast pbkdf2 (the key is already 64 random bytes, so a
       # memory-hard KDF would only slow boot — especially under TCG — for no added security).
-      if [ -f "$seed/vm-disk" ]; then
+      if [ -f "$seed/vm-disk" ] && [ -e /run/ccvm-store-on-disk ]; then
+        # nixInVm + vmDiskSize: the INITRD already LUKS-opened the disk and mounted it as the
+        # /nix/store overlay upper at /nix/.rw-store (marker /run/ccvm-store-on-disk, preserved
+        # across switch-root). Don't reformat — SHARE that one pool: bind its scratch/ subdir to
+        # /scratch. Fail-open: a hiccup just leaves the agent without /scratch (it still has tmpfs).
+        if mkdir -p /nix/.rw-store/scratch && mkdir -p /scratch \
+           && mount --bind /nix/.rw-store/scratch /scratch; then
+          chown ccvm:users /scratch || true
+          chmod 0770 /scratch || true
+        else
+          echo "ccvm: scratch: bind to the shared disk pool failed; continuing without /scratch" >&2
+        fi
+      elif [ -f "$seed/vm-disk" ]; then
+        # vmDiskSize WITHOUT a disk-backed store (nixInVm off, or the initrd backing failed open):
+        # this service owns the disk — LUKS-format/open/mkfs it fresh for a standalone /scratch.
         modprobe dm_mod dm_crypt 2>/dev/null || true
         dev=/dev/disk/by-id/virtio-ccvm-scratch
         for _ in $(seq 1 50); do [ -e "$dev" ] && break; sleep 0.1; done

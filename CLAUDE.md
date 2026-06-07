@@ -55,8 +55,9 @@ These are the whole point of the project. Treat any change that weakens one as a
   is cryptographic (the key dies with guest RAM → inert ciphertext even on a crash), with the trap
   `rm` as belt-and-suspenders. The host image MUST live in a disk-backed dir, never tmpfs/`$TMP`
   (that would put the "disk" back in RAM) — the wrapper refuses a tmpfs target unless
-  `CCVM_SCRATCH_ALLOW_TMPFS=1`. The pool backs only **bulk, non-secret** data (`/scratch`, later a
-  writable `/nix/store` overlay) — keep `/home`/secrets in tmpfs. Never stage the key through the seed.
+  `CCVM_SCRATCH_ALLOW_TMPFS=1`. The pool backs only **bulk, non-secret** data — `/scratch` and (with
+  `nixInVm`) the writable `/nix/store` overlay upper, opened+mounted in the **initrd** by a fail-open
+  LUKS oneshot (key still guest-only). Keep `/home`/secrets in tmpfs. Never stage the key through the seed.
 - **`autoUpdateFiles=false` means genuinely read-only.** The host tree is the 9p **lower**;
   edits land in a tmpfs **upper** and must not reach the host.
 - **Only the CWD is shared.** No `~/.ssh`, `~/.aws`, or home dir crosses the boundary.
@@ -72,8 +73,9 @@ These are the whole point of the project. Treat any change that weakens one as a
   pure RAM) and `nixInVm=false` (read-only `/nix/store`, no in-VM nix, lean closure) are the
   defaults — keep boot fast and the no-disk stance unless asked. `nixInVm` is **build-time** (it
   flips `nix.enable` and rebuilds the store as a writable overlay in the initrd) — never try to
-  make it a runtime `CCVM_*` env var. Its overlay upper is tmpfs (ephemeral, wiped on exit); a
-  large `nix develop` is expected to need `vmDiskSize` to relocate that upper to disk (still TODO).
+  make it a runtime `CCVM_*` env var. Its overlay upper is tmpfs (RAM) by default; combine with
+  `vmDiskSize>0` and an initrd LUKS oneshot relocates that upper onto the encrypted disk (fail-open
+  to tmpfs), so a large `nix develop` doesn't OOM guest RAM — one shared pool also backs `/scratch`.
   Three postures: minimal (`nixInVm=false`) · in-VM nix (`nixInVm=true`, guest-only) · + host store
   (`+ mountHostNixStore`, exposes the host store ro). Don't collapse these or default any of them on.
 - **`extraClaudeMd` is default-on context, not a flag.** A built-in blurb is staged as the

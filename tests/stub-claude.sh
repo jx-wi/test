@@ -70,6 +70,23 @@ case "$(stat -f -c %T /nix/store 2>/dev/null)" in
 esac
 command -v nix >/dev/null 2>&1 && echo "NIX:present" || echo "NIX:absent"
 
+# nixInVm + vmDiskSize: the initrd should back the overlay UPPER (/nix/.rw-store) with the
+# encrypted disk instead of tmpfs. Report its fstype (ext4 = disk-backed, tmpfs = RAM/fail-open)
+# and whether it sits on a dm-crypt device, so boot.sh can assert the disk-backed-upper posture.
+if [ -d /nix/.rw-store ]; then
+  case "$(stat -f -c %T /nix/.rw-store 2>/dev/null)" in
+    ext2/ext3 | ext4) echo "RWSTORE:disk" ;;
+    tmpfs) echo "RWSTORE:tmpfs" ;;
+    *) echo "RWSTORE:other" ;;
+  esac
+  dm="$(readlink -f /dev/mapper/ccvm-scratch 2>/dev/null)" # -> /dev/dm-N
+  if [ -n "$dm" ]; then
+    case "$(cat "/sys/class/block/$(basename "$dm")/dm/uuid" 2>/dev/null)" in
+      CRYPT-*) echo "RWSTORE:encrypted" ;;
+    esac
+  fi
+fi
+
 # Egress probes (best-effort, short timeout). With open egress both reach; with the
 # example.com allowlist only the allowed host reaches and the other is blocked. boot.sh
 # asserts on these only in the egress scenario.

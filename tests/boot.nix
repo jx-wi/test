@@ -27,4 +27,9 @@ in
   # In-VM nix: the stub asserts /nix/store is a writable overlay and `nix` is present. Builds a
   # bigger guest closure (nix.enable), so this posture is slower to build the first time.
   nix = mk { nixInVm = true; };
+  # In-VM nix + the encrypted disk pool: the initrd backs the /nix/store overlay UPPER with the
+  # disk (not tmpfs), and /scratch shares that same pool. The stub asserts /nix/.rw-store is a
+  # dm-crypt ext4 (RWSTORE:disk + RWSTORE:encrypted), the store is still an overlay, and /scratch
+  # works. 1 GiB is enough for the LUKS header + ext4 (sparse, so ~free on disk).
+  nixDisk = mk { nixInVm = true; vmDiskSize = 1; };
 }

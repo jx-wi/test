@@ -11,6 +11,75 @@
 { config, lib, pkgs, ... }:
 let
   cfg = config.ccvm;
+
+  # INITRD oneshot (nixInVm only): back the writable /nix/store overlay UPPER (/nix/.rw-store) with
+  # the opt-in vmDiskSize encrypted disk instead of tmpfs, so a multi-GB `nix develop` doesn't OOM
+  # guest RAM. It must run in the INITRD because /nix/store is neededForBoot — the overlay and its
+  # upper are assembled before switch-root, so the post-boot seed service (which LUKS-es the disk
+  # for /scratch) runs far too late. Strategy: mount-stacking + fail-open. The declarative tmpfs
+  # /nix/.rw-store mounts first (we order After it via RequiresMountsFor); then IF the disk is
+  # present we LUKS-format/open/mkfs it and mount it OVER that tmpfs, so the overlay's upperdir lands
+  # on disk. Absent disk or ANY failure leaves the tmpfs upper (RAM) untouched — boot never bricks.
+  # The LUKS key is generated in initrd /run (tmpfs RAM), never on 9p (host sees only ciphertext,
+  # §3.7), and shredded right after open. A marker in /run — which systemd preserves across
+  # switch-root — tells the post-boot seed service the disk is already open, so it shares the SAME
+  # pool for /scratch (binds a subdir) rather than reformatting. pbkdf2 keeps luksFormat fast (the
+  # key is already 64 random bytes; a memory-hard KDF would only slow the initrd for no gain).
+  storeDiskScript = pkgs.writeShellScript "ccvm-store-disk-setup" ''
+    set -u
+    export PATH=${lib.makeBinPath [ pkgs.coreutils pkgs.util-linux pkgs.cryptsetup pkgs.e2fsprogs config.systemd.package ]}:$PATH
+    target=/sysroot/nix/.rw-store
+    log() { echo "ccvm-store-disk: $*" >&2; }
+
+    # The initrd explicitly waits only for the STORE disk (vda, a declared fileSystem); our scratch
+    # disk (vdb, serial=ccvm-scratch) is undeclared, so its /dev/disk/by-id symlink may still be
+    # settling when we run. Let udev finish before probing.
+    udevadm settle --timeout=10 2>/dev/null || true
+
+    # Prefer the stable by-id symlink; fall back to scanning /sys/block/*/serial (kernel-provided,
+    # not udev — so it's there as soon as virtio_blk has probed the device).
+    find_dev() {
+      [ -e /dev/disk/by-id/virtio-ccvm-scratch ] && { echo /dev/disk/by-id/virtio-ccvm-scratch; return 0; }
+      for b in /sys/block/*; do
+        [ -r "$b/serial" ] || continue
+        [ "$(cat "$b/serial" 2>/dev/null)" = ccvm-scratch ] && { echo "/dev/$(basename "$b")"; return 0; }
+      done
+      return 1
+    }
+
+    dev=""
+    for _ in $(seq 1 50); do dev="$(find_dev)" && [ -n "$dev" ] && break; dev=""; sleep 0.1; done
+    if [ -z "$dev" ]; then
+      log "no vmDiskSize disk found after probe; /nix/.rw-store stays tmpfs (RAM). by-id=[$(ls /dev/disk/by-id 2>/dev/null | tr '\n' ' ')]"
+      exit 0
+    fi
+    log "found disk at $dev; LUKS-formatting (pbkdf2)"
+
+    mkdir -p "$target"
+    keyf=/run/ccvm-store-disk.key   # initrd /run = tmpfs (RAM); never on 9p, gone at power-off
+    ( umask 077; dd if=/dev/urandom of="$keyf" bs=64 count=1 status=none )
+    if cryptsetup luksFormat --batch-mode --type luks2 --pbkdf pbkdf2 \
+         --pbkdf-force-iterations 1000 "$dev" "$keyf" \
+       && cryptsetup open --type luks2 --key-file "$keyf" "$dev" ccvm-scratch; then
+      shred -u "$keyf" 2>/dev/null || rm -f "$keyf"
+      log "LUKS open OK; mkfs.ext4 + mount over the tmpfs at $target"
+      if mkfs.ext4 -q -F -E nodiscard /dev/mapper/ccvm-scratch \
+         && mount /dev/mapper/ccvm-scratch "$target"; then
+        # Pre-create the overlay upper/work dirs (+ a scratch subdir the post-boot service binds to
+        # /scratch) ON the disk, so the overlay assembles its upper on disk, not the shadowed tmpfs.
+        mkdir -p "$target/store" "$target/work" "$target/scratch"
+        : >/run/ccvm-store-on-disk   # survives switch-root → post-boot service shares this pool
+        log "SUCCESS: /nix/.rw-store backed by encrypted disk $dev"
+      else
+        log "mkfs/mount failed; /nix/.rw-store stays tmpfs (RAM)"
+        cryptsetup close ccvm-scratch 2>/dev/null || true
+      fi
+    else
+      log "LUKS setup failed (cryptsetup non-zero — crypto module missing in initrd?); /nix/.rw-store stays tmpfs (RAM)"
+      rm -f "$keyf"
+    fi
+    exit 0   # ALWAYS fail-open: never fail the unit, never block boot
+  '';
 in
 {
   imports = [
@@ -49,7 +118,9 @@ in
       description = ''
         Enable in-VM nix: a writable /nix/store overlay (read-only store image as the lower, a
         tmpfs upper) plus nix.enable, so `nix develop`/`nix build` work inside the guest. The
-        upper is RAM (tmpfs); a host vmDiskSize disk can back it instead (later increment).
+        upper is RAM (tmpfs) by default; combine with vmDiskSize > 0 and the initrd backs the
+        upper with the encrypted disk instead (fail-open to tmpfs), so a multi-GB closure does
+        not OOM guest RAM.
       '';
     };
   };
@@ -77,15 +148,61 @@ in
       "squashfs"
       "overlay"
       "erofs"
-    ];
-    boot.initrd.kernelModules = [ "virtio_pci" "virtio_mmio" "virtio_blk" ];
+    ]
+    # nixInVm only: device-mapper + dm-crypt + the LUKS cipher modules + ext4, so the initrd can
+    # LUKS-open AND mount the encrypted vmDiskSize disk as the /nix/store overlay upper
+    # (storeDiskScript). cryptoModules is NixOS's own arch-appropriate set (aes/xts/sha/…), the same
+    # list the luks module uses; ext4 pulls its deps (jbd2/mbcache/crc32c) via the module closure —
+    # the default initrd only carries squashfs/overlay/9p, so without this `mount` reports "unknown
+    # filesystem type 'ext4'". Gated so the default (RAM-only) initrd stays lean. The post-boot
+    # /scratch path (vmDiskSize without nixInVm) uses the running-system modules below instead.
+    ++ lib.optionals cfg.nixInVm ([ "dm_mod" "dm_crypt" "ext4" ] ++ config.boot.initrd.luks.cryptoModules);
+    boot.initrd.kernelModules = [ "virtio_pci" "virtio_mmio" "virtio_blk" ]
+      ++ lib.optionals cfg.nixInVm ([ "dm_mod" "dm_crypt" "ext4" ] ++ config.boot.initrd.luks.cryptoModules);
     boot.initrd.checkJournalingFS = false;
 
     # device-mapper + dm-crypt for the opt-in encrypted disk pool (vmDiskSize). Loaded in the
-    # running system (not the initrd) because the LUKS format/open happens post-boot in the seed
-    # service (guest/launcher.nix); harmless when vmDiskSize is off. The aes/xts/sha crypto the
-    # cipher needs is auto-loaded by the kernel crypto API when dm-crypt requests xts(aes).
+    # running system because the post-boot seed service (guest/launcher.nix) LUKS-formats the disk
+    # for /scratch when nixInVm is OFF; harmless when vmDiskSize is off. (When nixInVm is on, the
+    # INITRD owns the disk instead — see storeDiskScript / boot.initrd above.) The aes/xts/sha
+    # crypto the cipher needs is auto-loaded by the kernel crypto API when dm-crypt requests xts(aes).
     boot.kernelModules = [ "dm_mod" "dm_crypt" ];
+
+    # nixInVm only: pull the disk-backing initrd oneshot + its tools (cryptsetup, mkfs.ext4) into
+    # the initrd, and order it AFTER the declarative tmpfs /nix/.rw-store mount (RequiresMountsFor)
+    # but BEFORE the /nix/store overlay assembles (sysroot-nix-store.mount). See storeDiskScript for
+    # the mount-stacking + fail-open rationale. wantedBy initrd.target so it's pulled into the boot
+    # transaction; it always exits 0, so even a total disk failure can't block boot.
+    # List the packages explicitly (not just the script): storePaths copies each listed path's
+    # closure, so cryptsetup/mkfs.ext4 + their libs land in the initrd. Referencing them only via
+    # the script's PATH is NOT enough — the script's transitive refs aren't pulled into the initrd,
+    # so cryptsetup would be "command not found" (ENOENT on exec) at LUKS-format time.
+    boot.initrd.systemd.storePaths = lib.optionals cfg.nixInVm [
+      storeDiskScript
+      pkgs.cryptsetup
+      pkgs.e2fsprogs
+    ];
+    boot.initrd.systemd.services.ccvm-store-disk = lib.mkIf cfg.nixInVm {
+      description = "Back the /nix/store overlay upper with the encrypted vmDiskSize disk (fail-open to tmpfs)";
+      wantedBy = [ "initrd.target" ];
+      before = [ "sysroot-nix-store.mount" "initrd-fs.target" ];
+      unitConfig = {
+        DefaultDependencies = false;
+        # Resolve + order-After the tmpfs /nix/.rw-store mount unit WITHOUT hardcoding its escaped
+        # name (sysroot-nix-.rw\x2dstore.mount) — RequiresMountsFor takes the path and lets systemd
+        # find the unit. We mount the disk OVER that tmpfs, so the tmpfs must be mounted first.
+        RequiresMountsFor = "/sysroot/nix/.rw-store";
+      };
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        # Mirror diagnostics to the console (the script logs to stderr): the initrd journal isn't
+        # reliably handed to the running system's journal, so the console — which CCVM_DEBUG streams
+        # and the wrapper dumps on a boot timeout — is where a fail-open reason is actually visible.
+        StandardError = "journal+console";
+        ExecStart = "${storeDiskScript}";
+      };
+    };
 
     # Direct kernel boot has no bootloader to supply a cmdline, so the wrapper passes
     # these (plus init=<toplevel>/init) via QEMU -append. Serial console = ttyS0, which
@@ -123,10 +240,12 @@ in
         };
         storeFs =
           if cfg.nixInVm then {
-            # Writable store: ro lower + tmpfs upper, overlaid at /nix/store. The overlay is set up
-            # in the initrd (store is neededForBoot); nix realises new paths into the tmpfs upper, so
-            # they cost RAM (a host vmDiskSize disk can back the upper in a later increment). Wiped on
-            # exit like everything else. Off by default — this branch only exists when nixInVm is on.
+            # Writable store: ro lower + writable upper, overlaid at /nix/store. The overlay is set
+            # up in the initrd (store is neededForBoot). The upper (/nix/.rw-store) is tmpfs (RAM) by
+            # default; when vmDiskSize > 0 the initrd's ccvm-store-disk service mounts the encrypted
+            # disk OVER this tmpfs (fail-open) so the upper lands on disk — the overlay config here is
+            # IDENTICAL either way (only what's mounted at /nix/.rw-store changes). nix realises new
+            # paths into the upper; wiped on exit. Off by default — this branch only exists when nixInVm is on.
             "/nix/.ro-store" = roStore;
             "/nix/.rw-store" = {
               device = "tmpfs";

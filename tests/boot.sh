@@ -26,6 +26,7 @@ WRAP="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix open)/b
 WRAP_EGRESS="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix egress)/bin/ccvm"
 WRAP_SCRATCH="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix scratch)/bin/ccvm"
 WRAP_NIX="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix nix)/bin/ccvm"
+WRAP_NIXDISK="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix nixDisk)/bin/ccvm"
 
 # Deterministic git-config fixture so the shareGitConfig assertions don't depend on the
 # runner's real ~/.gitconfig. Point HOME here for the wrapper runs (set AFTER `nix build`, so
@@ -193,6 +194,32 @@ grep -qa '^STORE:overlay$' <<<"$OUT" &&
 grep -qa '^NIX:present$' <<<"$OUT" &&
   ok "nixInVm: nix is available in the guest" || no "nixInVm: nix not on PATH"
 rm -rf "$PROJ_NIX"
+
+# ---- nixInVm + vmDiskSize: the overlay upper is backed by the encrypted disk ----
+# Both features on: the INITRD LUKS-opens the disk and mounts it as the /nix/store overlay UPPER
+# (/nix/.rw-store) instead of tmpfs, so a multi-GB closure doesn't OOM RAM — and /scratch shares
+# that same pool. Assert: store is still an overlay, nix present, the upper is a dm-crypt ext4 (NOT
+# tmpfs — that would mean it fell open to RAM), and /scratch is a writable mount off the shared pool.
+PROJ_ND="$(mktemp -d)"
+ND_TMP="$(mktemp -d)"
+OUT="$(CCVM_SCRATCH_DIR="$ND_TMP" CCVM_SCRATCH_ALLOW_TMPFS=1 run_capture "$WRAP_NIXDISK" "$PROJ_ND")"
+grep -qa '^STORE:overlay$' <<<"$OUT" &&
+  ok "nixInVm+disk: /nix/store is still a writable overlay" ||
+  no "nixInVm+disk: /nix/store not an overlay: $(grep -a '^STORE:' <<<"$OUT")"
+grep -qa '^NIX:present$' <<<"$OUT" &&
+  ok "nixInVm+disk: nix is available in the guest" || no "nixInVm+disk: nix not on PATH"
+grep -qa '^RWSTORE:disk$' <<<"$OUT" &&
+  ok "nixInVm+disk: overlay upper is disk-backed ext4 (not tmpfs/RAM)" ||
+  no "nixInVm+disk: overlay upper not disk-backed (fell open to tmpfs?): $(grep -a '^RWSTORE:' <<<"$OUT")"
+grep -qa '^RWSTORE:encrypted$' <<<"$OUT" &&
+  ok "nixInVm+disk: overlay upper sits on a dm-crypt (LUKS) device" ||
+  no "nixInVm+disk: overlay upper not on a dm-crypt device (host could read plaintext)"
+grep -qa '^SCRATCH:mounted$' <<<"$OUT" &&
+  ok "nixInVm+disk: /scratch shares the same disk pool" ||
+  no "nixInVm+disk: /scratch not mounted: $(grep -a '^SCRATCH:' <<<"$OUT")"
+grep -qa '^SCRATCH:writable$' <<<"$OUT" &&
+  ok "nixInVm+disk: /scratch is writable by the agent" || no "nixInVm+disk: /scratch not writable"
+rm -rf "$PROJ_ND" "$ND_TMP"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -357,8 +357,10 @@ egress *anonymization* (how those packets reach the wire) belongs on the host.
 > the host after exit**. Two refinements landed during implementation that the plan below predates:
 > the LUKS format uses a fast **pbkdf2** (the key is already 64 random bytes, so a memory-hard KDF
 > would only slow boot for no security gain), and a tmpfs image dir is **refused** unless
-> `CCVM_SCRATCH_ALLOW_TMPFS=1`. The one piece still open is wiring the two together — backing the
-> `nixInVm` overlay *upper* with the `vmDiskSize` disk (today it's tmpfs) — see "Remaining" below.
+> `CCVM_SCRATCH_ALLOW_TMPFS=1`. The last piece — wiring the two together so the `nixInVm` overlay
+> *upper* is backed by the `vmDiskSize` disk instead of tmpfs — is now **DONE & KVM-verified
+> (2026-06-07)**: an initrd LUKS oneshot, fail-open to tmpfs, one shared encrypted pool for the
+> store upper and `/scratch`. See "Disk-backed upper" under "Remaining follow-ons" below.
 
 **The problem the RAM-only model can't solve.** ccvm's root is tmpfs and `/nix/store` is a
 read-only squashfs (§3.4). That is the right default — wipe-on-exit is a property of *physics*,
@@ -445,11 +447,31 @@ on the host after exit** (it lived only in the tmpfs upper — ephemeral guarant
 no store-DB registration (nix builds/substitutes fresh into the upper rather than reusing baked
 paths — a later optimization), tmpfs upper only.
 
-**Remaining follow-ons (not blocking — `nix develop` works today):**
-- **Disk-backed upper.** Today the overlay upper is tmpfs, so a large `nix develop` exhausts guest
-  RAM. Relocating the upper onto the `vmDiskSize` encrypted disk *is* the LUKS-in-initrd work
-  originally feared here (the disk must be opened + the upper mounted in the initrd, before the
-  store is needed) — with fail-open to the tmpfs upper. This is the genuinely hard increment.
+**Disk-backed upper — DONE & KVM-verified (2026-06-07).** When `nixInVm` and `vmDiskSize > 0` are
+both on, the overlay upper (`/nix/.rw-store`) is backed by the encrypted disk instead of tmpfs, so a
+large `nix develop` doesn't exhaust guest RAM. This is the LUKS-in-initrd work originally feared here:
+the disk must be opened and mounted before the store is assembled, so it runs as a **systemd-initrd**
+oneshot (`ccvm-store-disk`, gated on `nixInVm`). The shape chosen for low brick-risk is
+**mount-stacking with fail-open**: the declarative tmpfs `/nix/.rw-store` still mounts first (it is
+the baseline), then — if the disk is present — the service `luksFormat`/`open`/`mkfs.ext4`s it and
+mounts it *over* that tmpfs, so the overlay's `upperdir` lands on disk; the overlay config is
+byte-identical either way, only what is mounted at `/nix/.rw-store` differs. Absent disk or *any*
+failure leaves the tmpfs upper untouched (the service always exits 0), so boot can never brick. The
+LUKS key is generated in the initrd's `/run` (tmpfs RAM), shredded right after open, and never
+crosses 9p — the host sees only ciphertext, the same invariant as the post-boot `/scratch` path. The
+disk is a single shared **pool**: on success the initrd writes `/run/ccvm-store-on-disk` (systemd
+preserves `/run` across switch-root), and the post-boot seed service, seeing that marker, binds
+`/nix/.rw-store/scratch` to `/scratch` rather than re-formatting a second disk (`lsblk` confirms one
+`ccvm-scratch` crypt device backing both). Three things the *default* initrd lacks had to be added,
+all `nixInVm`-gated: a `udevadm settle` before probing (the scratch disk is undeclared, so only the
+store disk is waited for and the scratch `by-id` link lags); `cryptsetup` + `e2fsprogs` listed in
+`boot.initrd.systemd.storePaths` *directly* (a script's transitive references are not pulled into the
+initrd — referencing them only via `PATH` yields `command not found`); and the `ext4` module (the
+default initrd carries only squashfs/overlay/9p). Verified by `nix flake check`, `tests/boot.sh`
+31/31 (the `nixDisk` posture), and a real `CCVM_VM_DISK_SIZE=8` run building `nixpkgs#hello` into the
+disk-backed upper.
+
+**Remaining follow-ons (not blocking — `nix develop` with a disk works today):**
 - **L2 — `mountHostNixStore` as the overlay lower + acceleration.** Use the host store (ro 9p) as
   the lower for path *availability*, plus a separate **substituter** option (host as a binary cache)
   for the actual speed-up — because the FS mount alone gives paths but not the host nix **DB**
