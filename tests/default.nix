@@ -38,6 +38,7 @@ let
           "@EGRESSPORTS@"
           "@VERSION@"
           "@VMDISKSIZE@"
+          "@ACCELERATION@"
         ]
         [
           "/dev/null" # KERNEL    } never read: the dry-run hook exits before boot.
@@ -62,6 +63,7 @@ let
           egressPorts # EGRESSPORTS
           "0.0.0-test" # VERSION (fixture; host.sh asserts --ccvm-version echoes it)
           "0" # VMDISKSIZE (0 = no disk, the default; host.sh opts in via CCVM_VM_DISK_SIZE)
+          "auto" # ACCELERATION (default mode; host.sh drives modes via CCVM_ACCEL + CCVM_KVM_DEV)
         ]
         (builtins.readFile ../wrapper/ccvm.sh);
     };

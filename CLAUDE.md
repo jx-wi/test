@@ -159,8 +159,19 @@ These are the whole point of the project. Treat any change that weakens one as a
   — the workspace 9p share and SSH port — are **not** baked; the wrapper builds those QEMU
   args at runtime (the microvm.nix "runtime-share trap", design §3.8).
 - **Runtime override pattern:** a `CCVM_*` env var overrides the baked default for one run
-  (`CCVM_AUTOUPDATE`, `CCVM_SHARE_CLAUDE_CONFIG`, `CCVM_MLOCK`); an explicit `ccvm` flag wins over
-  the env var.
+  (`CCVM_AUTOUPDATE`, `CCVM_SHARE_CLAUDE_CONFIG`, `CCVM_MLOCK`, `CCVM_ACCEL`); an explicit `ccvm` flag
+  wins over the env var.
+- **`acceleration` is a declarative mode, baked as `@ACCELERATION@` (`auto`/`kvm`/`tcg`).** `auto`
+  (default) uses KVM when `/dev/kvm` is usable else falls back to TCG, **never** erroring on accel —
+  the friction-free first run; it uses `-cpu max` (not `host`) so QEMU's own `-accel kvm:tcg` runtime
+  fallback stays valid on a present-but-broken KVM. `kvm` *requires* KVM: it hard-errors with an
+  actionable reason (missing device / not in the `kvm` group / not writable) and uses `-accel kvm`
+  (no fallback) + `-cpu host`. `tcg` forces emulation. Per-run: `CCVM_ACCEL`. The boot-wait budget is
+  generous for anything that might run emulated (`ACCEL != kvm`) — the cap is a timeout, not a wait,
+  so it never slows a fast KVM boot. The KVM-usability probe only checks the device is writable (it
+  can't detect a present-but-broken KVM) — so a real `KVM_CREATE_VM` failure surfaces as QEMU's error
+  (`kvm` mode) or a silent runtime fallback to TCG (`auto`). Tests drive the modes via `CCVM_KVM_DEV`
+  (internal seam) to simulate `/dev/kvm` states portably.
 - **Forwarded argv is NUL-separated** on the wire (`claude-args` in the seed, read with
   `mapfile -d ""`); spaces/quotes/globs survive intact. Never rebuild the argv by
   string-splitting.

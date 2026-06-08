@@ -12,7 +12,7 @@ let
   defaults = import ../lib/defaults.nix { inherit pkgs; };
   ccvmPkg = (mkCcvm {
     inherit (cfg)
-      package autoUpdateFiles memory cores extraPackages
+      package autoUpdateFiles memory cores acceleration extraPackages
       apiKeyVariable shareClaudeConfig persistClaudeProjects shareGitConfig extraClaudeMd
       lockGuestMemory vmDiskSize egressAllowlist egressPorts extraGuestModules
       # programs.ccvm.nix.{enable,substituters,trustedPublicKeys} passes straight through — the
@@ -56,6 +56,22 @@ in
       type = lib.types.ints.positive;
       default = defaults.cores;
       description = "VM vCPUs.";
+    };
+
+    acceleration = lib.mkOption {
+      type = lib.types.enum [ "auto" "kvm" "tcg" ];
+      default = defaults.acceleration;
+      description = ''
+        VM CPU acceleration mode.
+        - `auto` (default): use KVM when `/dev/kvm` is usable, otherwise fall back to software
+          emulation (TCG). Never errors on acceleration — the friction-free first-run experience.
+        - `kvm`: require KVM. Fails fast with an actionable reason if it can't be used (no
+          `/dev/kvm`, not in the `kvm` group, not writable) and does NOT silently fall back, so a
+          misconfigured host is obvious instead of silently slow.
+        - `tcg`: force software emulation. Slower, but works anywhere KVM doesn't — nested virt, CI,
+          or a present-but-broken `/dev/kvm`.
+        Per-run override: `CCVM_ACCEL=auto|kvm|tcg`.
+      '';
     };
 
     extraPackages = lib.mkOption {

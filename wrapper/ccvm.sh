@@ -67,7 +67,7 @@ flag wins over the env var):
   CCVM_CLAUDE_MD=<file>        alternate ccvm-context CLAUDE.md (empty disables it)
   CCVM_MLOCK=0|1               lock guest RAM so it can't reach host swap
   CCVM_MEMORY=<MiB>            guest RAM for this run
-  CCVM_ACCEL=tcg               force software emulation (no KVM)
+  CCVM_ACCEL=auto|kvm|tcg      override the acceleration mode for this run
   CCVM_MACHINE=<type>          QEMU machine type (default microvm on x86_64)
 
 See the README and docs/design.md for the threat model and full option reference.
@@ -177,13 +177,15 @@ pick_port() {
 # ssh session) because the sshd ForceCommand would otherwise launch claude on every probe.
 wait_for_boot() {
   # Cold TCG (software emulation) boots are far slower than KVM and vary with host load, so
-  # a ~36s cap (120 × 0.3s) produces spurious "boot failed" under tcg (the box may still be
-  # booting). Give TCG a much longer budget; KVM keeps the snappy cap. CCVM_BOOT_TRIES
-  # overrides for pathological cases. Each try is ~0.3s sleep + connect/read overhead.
+  # a ~36s cap (120 × 0.3s) produces spurious "boot failed" under emulation (the box may still
+  # be booting). The cap is a TIMEOUT, not a fixed wait — the loop returns the instant sshd
+  # answers — so a generous budget costs nothing on a fast boot. Give the long budget to anything
+  # that might run emulated (tcg, or auto's `kvm:tcg` that could fall back at init); only the
+  # committed `kvm` accel keeps the snappy cap. CCVM_BOOT_TRIES overrides for pathological cases.
   # The spinner (if any) animates in the background — see spinner_start — so this loop just
   # probes and sleeps; it never touches the terminal itself.
   local _ banner tries="${CCVM_BOOT_TRIES:-120}"
-  [[ -z ${CCVM_BOOT_TRIES:-} && ${ACCEL:-} == tcg ]] && tries=600
+  [[ -z ${CCVM_BOOT_TRIES:-} && ${ACCEL:-} != kvm ]] && tries=600
   for _ in $(seq 1 "$tries"); do
     kill -0 "$QEMU_PID" 2>/dev/null || return 1
     # Brace group, not a bare `exec … 2>/dev/null`: the connect is attempted before a
@@ -311,20 +313,67 @@ fi
 WORKDIR="$PWD"
 [[ -d $WORKDIR ]] || die "current directory '$WORKDIR' is not a directory"
 
-# KVM (near-native) when /dev/kvm is usable, else TCG software emulation. CCVM_ACCEL=tcg
-# forces TCG even when /dev/kvm exists — needed under nested virt / CI where the device is
-# present but broken.
-if [[ ${CCVM_ACCEL:-} == tcg ]]; then
-  ACCEL="tcg"
-  CPU="max"
-elif [[ -w /dev/kvm ]]; then
-  ACCEL="kvm:tcg"
-  CPU="host"
-else
-  warn "/dev/kvm is not writable — falling back to software emulation (TCG). This is correct but slow."
-  ACCEL="tcg"
-  CPU="max"
-fi
+# ---- acceleration mode -----------------------------------------------------
+# Declarative default baked from `programs.ccvm.acceleration`; CCVM_ACCEL overrides for one run.
+# Three deliberately distinct modes (kept consistent in their checks + messaging):
+#   auto — use KVM when usable, else fall back to TCG. NEVER hard-fails on acceleration (best
+#          first-run experience). KVM path uses `-cpu max` (not host) so QEMU's own kvm->tcg
+#          fallback (`-accel kvm:tcg`) stays valid if KVM dies at init on a present-but-broken host.
+#   kvm  — you DECLARED KVM: error fast with an actionable reason if /dev/kvm is missing / not in
+#          the kvm group / not writable, and NO silent TCG fallback (`-accel kvm`, `-cpu host`), so
+#          a broken-but-present KVM surfaces QEMU's own KVM error instead of running slow.
+#   tcg  — force software emulation; same clear messaging, never touches /dev/kvm.
+ACCEL_MODE="@ACCELERATION@"
+case "${CCVM_ACCEL:-}" in
+  "") ;;
+  auto | kvm | tcg) ACCEL_MODE="$CCVM_ACCEL" ;;
+  *) die "CCVM_ACCEL must be 'auto', 'kvm', or 'tcg' (got '$CCVM_ACCEL')" ;;
+esac
+
+# Is /dev/kvm usable by this user? On failure sets KVM_REASON to an actionable explanation.
+# CCVM_KVM_DEV overrides the device path (internal seam: lets tests simulate states portably).
+KVM_REASON=""
+kvm_usable() {
+  local dev="${CCVM_KVM_DEV:-/dev/kvm}" grp
+  if [[ ! -e $dev ]]; then
+    KVM_REASON="$dev does not exist — the KVM kernel modules aren't loaded, or hardware virtualization (VT-x/AMD-V) is disabled in firmware."
+    return 1
+  fi
+  if [[ ! -w $dev ]]; then
+    grp="$(stat -c '%G' "$dev" 2>/dev/null || echo kvm)"
+    KVM_REASON="$dev is not writable by you — add yourself to the '$grp' group (sudo usermod -aG $grp ${USER:-<you>}, then re-login) or fix its permissions."
+    return 1
+  fi
+  return 0
+}
+
+case "$ACCEL_MODE" in
+  tcg)
+    ACCEL="tcg"
+    CPU="max"
+    ;;
+  kvm)
+    if kvm_usable; then
+      ACCEL="kvm" # committed — no TCG fallback, so a broken KVM surfaces QEMU's own error
+      CPU="host"  # full near-native model (valid because we're committed to KVM)
+    else
+      die "acceleration is 'kvm' but KVM is unavailable: $KVM_REASON Use acceleration = \"auto\" to fall back to software emulation, or \"tcg\" to force it."
+    fi
+    ;;
+  auto)
+    if kvm_usable; then
+      ACCEL="kvm:tcg" # prefer KVM, let QEMU fall back to TCG if it dies at init
+      CPU="max"       # valid under BOTH kvm and tcg, so that fallback actually works
+    else
+      warn "KVM unavailable ($KVM_REASON) — using software emulation (TCG): correct but slower. Set acceleration = \"kvm\" to require KVM, or \"tcg\" to silence this."
+      ACCEL="tcg"
+      CPU="max"
+    fi
+    ;;
+  *)
+    die "internal: invalid acceleration mode '$ACCEL_MODE' (expected auto, kvm, or tcg)"
+    ;;
+esac
 
 # Auth is optional. If present, the API key rides the encrypted SSH channel via
 # SendEnv -> AcceptEnv — never on disk or argv. With neither a key nor shared host
@@ -381,6 +430,9 @@ cp "$TMP/hostkey.pub" "$SEED/ssh_host_ed25519_key.pub"
 printf '%s' "$WORKDIR" >"$SEED/workdir"
 printf '%s' "$MODE" >"$SEED/mode"
 printf '%s' "$SHELL_MODE" >"$SEED/shell"
+# Dry-run only: record the resolved acceleration (mode + QEMU accel + cpu) so host.sh can assert
+# the mode→args mapping without booting. Not written on real runs (the guest never reads it).
+[[ $DRYRUN == 1 ]] && printf '%s %s %s\n' "$ACCEL_MODE" "$ACCEL" "$CPU" >"$SEED/accel"
 # Host user identity. The guest remaps its agent user (ccvm) to these so 9p passthrough
 # (security_model=none) yields correct workspace ownership in rw mode: a host uid != 1000
 # would otherwise see the project owned by a foreign uid (agent can't write its own files)

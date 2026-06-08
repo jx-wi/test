@@ -415,6 +415,59 @@ fi
 # touch nothing host-side (no seed marker, no 9p share, no staged secret), so there is nothing to
 # assert here. The guest-side plumbing is covered by tests/boot.sh (the nixSubst posture).
 
+# ===========================================================================
+# 13. acceleration: the declarative mode (auto|kvm|tcg) baked from `acceleration`,
+#     overridable per-run by CCVM_ACCEL. The wrapper records the resolved
+#     `<mode> <accel> <cpu>` in seed/accel under dry-run; CCVM_KVM_DEV (internal
+#     seam) simulates /dev/kvm states so these run identically on any host.
+# ===========================================================================
+FAKE_KVM="$WORK/fake-kvm" # a writable stand-in => "KVM usable"; /nonexistent => "unusable"
+: >"$FAKE_KVM"
+
+# Baked default is auto. KVM usable -> kvm:tcg + cpu max (so QEMU's runtime fallback stays valid).
+SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 CCVM_KVM_DEV="$FAKE_KVM" run)/seed"
+[[ "$(cat "$SEED/accel" 2>/dev/null)" == "auto kvm:tcg max" ]] &&
+  ok "acceleration: default auto + usable KVM -> kvm:tcg, cpu max" ||
+  no "acceleration: auto/usable resolved wrong: '$(cat "$SEED/accel" 2>/dev/null)'"
+
+# auto + unusable KVM -> falls back to tcg, no error (friction-free first run).
+SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 CCVM_KVM_DEV=/nonexistent run)/seed"
+[[ "$(cat "$SEED/accel" 2>/dev/null)" == "auto tcg max" ]] &&
+  ok "acceleration: auto + no KVM -> tcg fallback (no error)" ||
+  no "acceleration: auto fallback resolved wrong: '$(cat "$SEED/accel" 2>/dev/null)'"
+
+# kvm mode + usable -> kvm + cpu host, no TCG fallback.
+SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 CCVM_ACCEL=kvm CCVM_KVM_DEV="$FAKE_KVM" run)/seed"
+[[ "$(cat "$SEED/accel" 2>/dev/null)" == "kvm kvm host" ]] &&
+  ok "acceleration: kvm mode + usable -> kvm, cpu host (no fallback)" ||
+  no "acceleration: kvm/usable resolved wrong: '$(cat "$SEED/accel" 2>/dev/null)'"
+
+# kvm mode + UNusable -> hard error naming KVM (no silent fallback).
+if OUT="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 CCVM_ACCEL=kvm CCVM_KVM_DEV=/nonexistent run 2>&1)"; then
+  no "acceleration: kvm mode did not error on an unusable /dev/kvm"
+elif grep -qi 'kvm' <<<"$OUT"; then
+  ok "acceleration: kvm mode hard-errors with a KVM reason when unusable"
+else
+  no "acceleration: kvm-mode error lacked a KVM reason: $OUT"
+fi
+
+# tcg mode -> tcg + cpu max, never consults /dev/kvm (unusable device, still tcg).
+SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 CCVM_ACCEL=tcg CCVM_KVM_DEV=/nonexistent run)/seed"
+[[ "$(cat "$SEED/accel" 2>/dev/null)" == "tcg tcg max" ]] &&
+  ok "acceleration: tcg mode -> tcg, cpu max (ignores /dev/kvm)" ||
+  no "acceleration: tcg resolved wrong: '$(cat "$SEED/accel" 2>/dev/null)'"
+
+# Invalid CCVM_ACCEL -> die with usage (consistent with kvm's erroring).
+if OUT="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 CCVM_ACCEL=bogus run 2>&1)"; then
+  no "acceleration: invalid CCVM_ACCEL was not rejected"
+elif grep -qi "must be 'auto', 'kvm', or 'tcg'" <<<"$OUT"; then
+  ok "acceleration: invalid CCVM_ACCEL rejected with usage"
+else
+  no "acceleration: invalid CCVM_ACCEL error unclear: $OUT"
+fi
+
+rm -f "$FAKE_KVM"
+
 # ---------------------------------------------------------------------------
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

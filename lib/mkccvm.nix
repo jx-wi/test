@@ -123,6 +123,7 @@ let
         "@EGRESSPORTS@"
         "@VERSION@"
         "@VMDISKSIZE@"
+        "@ACCELERATION@"
       ]
       [
         kernel
@@ -144,6 +145,7 @@ let
         (lib.concatStringsSep " " (map toString config.egressPorts))
         version
         (toString config.vmDiskSize)
+        config.acceleration
       ]
       (builtins.readFile ../wrapper/ccvm.sh);
   });

@@ -10,6 +10,7 @@
   autoUpdateFiles = true; # true = live host edits (rw, native); false = ephemeral overlay
   memory = 4096; # guest RAM in MiB (runtime QEMU arg; CCVM_MEMORY overrides per run)
   cores = 4; # guest vCPUs
+  acceleration = "auto"; # VM CPU accel: "auto" (KVM w/ TCG fallback) | "kvm" (require KVM, error if unusable) | "tcg" (force emulation). Per-run: CCVM_ACCEL
   extraPackages = [ ]; # extra toolchains available inside the VM (a base set is always present)
   nix = {
     enable = false; # build-time: enable in-VM nix (writable /nix/store overlay + nix.enable). User-facing: programs.ccvm.nix.enable
