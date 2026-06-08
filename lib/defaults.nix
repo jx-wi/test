@@ -13,7 +13,8 @@
   extraPackages = [ ]; # extra toolchains available inside the VM (a base set is always present)
   nix = {
     enable = false; # build-time: enable in-VM nix (writable /nix/store overlay + nix.enable). User-facing: programs.ccvm.nix.enable
-    useHostStoreAsCache = false; # host store as a build substituter. DECLARED but not implemented yet (design §3.11 L2)
+    substituters = [ ]; # extra binary caches for in-VM nix (HTTP substituters; needs nix.enable). Empty = just cache.nixos.org
+    trustedPublicKeys = [ ]; # public keys that verify paths from `substituters`
   };
   apiKeyVariable = "ANTHROPIC_API_KEY"; # host env var carrying the key (rides SendEnv only)
   shareClaudeConfig = true; # reuse the host ~/.claude (login/settings/memory), read-only

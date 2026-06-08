@@ -79,20 +79,21 @@ These are the whole point of the project. Treat any change that weakens one as a
   default; combine with `vmDiskSize>0` and an initrd LUKS oneshot relocates that upper onto the
   encrypted disk (fail-open to tmpfs), so a large `nix develop` doesn't OOM guest RAM — one shared
   pool also backs `/scratch`. **The guest always boots off the self-contained squashfs store; the
-  host store is never the guest's boot store.** Reusing the host store to *accelerate* in-VM builds
-  is `nix.useHostStoreAsCache` — a read-only build **substituter** (never a writable host-store
-  mount): the wrapper attaches host `/nix/store` AND `/nix/var/nix/db` as **ro** 9p shares; the guest
-  mounts the store ro at the chroot-store root `/nix/.host-store` and **copies** the host DB's
-  `db.sqlite` into a `ccvm`-owned writable dir at `/nix/.host-store/nix/var/nix/db`, then registers
-  `local?root=/nix/.host-store` as a substituter (design §3.11 L2 / TODO #15). Why a copy, not a ro
-  mount or an overlay: nix opens a local store's DB **read-write** even just to query it (big-lock +
-  WAL), and the consumer is the non-root **agent** — a ro DB mount can't be opened ("opening lock file
-  …: Permission denied") and an overlay copy-up would be root-owned (the agent couldn't trigger it).
-  A flat `db.sqlite` copy is fast I/O; do NOT switch to dump+`load-db` (CPU-bound replay of a hundreds-
-  of-MB host DB blocked sshd under TCG). chown only the small `nix/var` tree to ccvm — NEVER the ro
-  store mount. Baked flag `@HOSTSTORECACHE@` + seed marker `nix-host-store-cache` + per-run
-  `CCVM_NIX_HOST_CACHE`. The old `mountHostNixStore` (host store as the guest's boot store) was
-  **deliberately removed** — do not re-add it; the cache is ro, never the boot store.
+  host store is never the guest's boot store.** To give in-VM nix extra pre-built paths, point it at a
+  **binary cache** via `nix.substituters` + `nix.trustedPublicKeys` (typically your own self-hosted
+  cache of tweaked deps). These are **pure guest-closure config** — baked into the guest's nix.conf
+  (appended to `cache.nixos.org` and nixpkgs' keys), no wrapper token, no seed marker, no mount: a
+  binary cache is **HTTP substitution**, reached over the network at line rate, exposing nothing of the
+  host. `require-sigs` stays ON — paths must verify against `trustedPublicKeys`. A **public-read** signed
+  cache works with zero secrets; a cache behind a token/netrc is **not yet supported** (ccvm carries no
+  host credentials — a sanitized netrc-staging path, modeled on `shareGitConfig`, would be the future
+  story). Two host-store-reuse predecessors were **deliberately removed — do not re-add either**:
+  `mountHostNixStore` (host store as the guest's *boot* store) and `nix.useHostStoreAsCache` (host
+  `/nix/store`+DB over **ro 9p** as a `local?root=…` substituter with a `db.sqlite` copy). The cache
+  variant was implemented, KVM-verified, then cut: 9p copy ran **slower than downloading** (<1 MiB/s
+  vs. network), it punched a hole in the isolation thesis (exposed the *entire* host store ro to the
+  agent), and the audience that benefits from caching already runs a real binary cache — which the
+  `substituters` option serves cleanly. See design §3.11 L2 / TODO #15.
 - **`extraClaudeMd` is default-on context, not a flag.** A built-in blurb is staged as the
   guest's `~/.claude/CLAUDE.md` (via the seed, **appended** to any host-shared one — never
   clobbering it) so the agent knows it's in ccvm. It must stay seed-delivered, never become

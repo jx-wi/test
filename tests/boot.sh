@@ -27,7 +27,7 @@ WRAP_EGRESS="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix 
 WRAP_SCRATCH="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix scratch)/bin/ccvm"
 WRAP_NIX="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix nix)/bin/ccvm"
 WRAP_NIXDISK="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix nixDisk)/bin/ccvm"
-WRAP_NIXCACHE="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix nixCache)/bin/ccvm"
+WRAP_NIXSUBST="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix nixSubst)/bin/ccvm"
 
 # Deterministic git-config fixture so the shareGitConfig assertions don't depend on the
 # runner's real ~/.gitconfig. Point HOME here for the wrapper runs (set AFTER `nix build`, so
@@ -222,28 +222,20 @@ grep -qa '^SCRATCH:writable$' <<<"$OUT" &&
   ok "nix.enable+disk: /scratch is writable by the agent" || no "nix.enable+disk: /scratch not writable"
 rm -rf "$PROJ_ND" "$ND_TMP"
 
-# ---- nix.useHostStoreAsCache: host /nix/store mounted ro as a build cache ----
-# The wrapper attaches the host's /nix/store AND nix DB as READ-ONLY 9p shares; the guest mounts the
-# store ro at the chroot root /nix/.host-store, copies the host db.sqlite into a ccvm-owned writable
-# dir there, and registers `local?root=/nix/.host-store` as a substituter. Assert: the host store is
-# mounted, it is read-only (the agent must not be able to mutate the host's real store), the
-# substituter is in nix.conf, AND a host path is reported valid via the chroot store (DB copy works →
-# nix will substitute it rather than rebuild).
-PROJ_HC="$(mktemp -d)"
-OUT="$(run_capture "$WRAP_NIXCACHE" "$PROJ_HC")"
-grep -qa '^HOSTCACHE:mounted$' <<<"$OUT" &&
-  ok "hostStoreCache: host /nix/store is mounted in the guest" ||
-  no "hostStoreCache: host store not mounted: $(grep -a '^HOSTCACHE:' <<<"$OUT")"
-grep -qa '^HOSTCACHE:readonly$' <<<"$OUT" &&
-  ok "hostStoreCache: host store mount is read-only (agent can't mutate the host store)" ||
-  no "hostStoreCache: host store mount NOT read-only — trust-boundary break: $(grep -a '^HOSTCACHE:' <<<"$OUT")"
-grep -qa '^HOSTCACHE:configured$' <<<"$OUT" &&
-  ok "hostStoreCache: nix.conf carries the local?root=/nix/.host-store substituter" ||
-  no "hostStoreCache: substituter not in nix.conf: $(grep -a '^HOSTCACHE:' <<<"$OUT")"
-grep -qa '^HOSTCACHE:db-valid$' <<<"$OUT" &&
-  ok "hostStoreCache: DB copy works — a host store path is VALID via the substituter (will substitute)" ||
-  no "hostStoreCache: host path not valid in the chroot store (DB copy failed?): $(grep -a '^HOSTCACHE:' <<<"$OUT")"
-rm -rf "$PROJ_HC"
+# ---- nix.substituters / nix.trustedPublicKeys: extra binary cache reaches guest nix.conf ----
+# nix.substituters/trustedPublicKeys are pure guest-closure config (a binary cache is HTTP
+# substitution, no mount). Assert the configured substituter URL and its trusted public key both
+# reach the guest's effective nix config. (A real fetch is a network/human check — example.invalid
+# never resolves; what we verify here is that the option plumbs through to nix.conf.)
+PROJ_SUB="$(mktemp -d)"
+OUT="$(run_capture "$WRAP_NIXSUBST" "$PROJ_SUB")"
+grep -qa '^SUBST:substituter-configured$' <<<"$OUT" &&
+  ok "substituters: configured cache URL reaches the guest nix.conf" ||
+  no "substituters: cache URL not in guest nix.conf: $(grep -a '^SUBST:' <<<"$OUT")"
+grep -qa '^SUBST:key-configured$' <<<"$OUT" &&
+  ok "substituters: trusted public key reaches the guest nix.conf (signatures stay verified)" ||
+  no "substituters: trusted public key not in guest nix.conf: $(grep -a '^SUBST:' <<<"$OUT")"
+rm -rf "$PROJ_SUB"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

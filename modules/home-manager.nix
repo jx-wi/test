@@ -15,8 +15,8 @@ let
       package autoUpdateFiles memory cores extraPackages
       apiKeyVariable shareClaudeConfig persistClaudeProjects shareGitConfig extraClaudeMd
       lockGuestMemory vmDiskSize egressAllowlist egressPorts extraGuestModules
-      # programs.ccvm.nix.{enable,useHostStoreAsCache} passes straight through — the internal
-      # config and the guest use the SAME nested `nix` name (no nixInVm mapping anymore).
+      # programs.ccvm.nix.{enable,substituters,trustedPublicKeys} passes straight through — the
+      # internal config and the guest use the SAME nested `nix` name (no nixInVm mapping anymore).
       nix;
   }).wrapper;
 in
@@ -81,21 +81,33 @@ in
         '';
       };
 
-      useHostStoreAsCache = lib.mkOption {
-        type = lib.types.bool;
-        default = defaults.nix.useHostStoreAsCache;
+      substituters = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = defaults.nix.substituters;
+        example = lib.literalExpression ''[ "https://cache.example.com" ]'';
         description = ''
-          Reuse the host's /nix/store to accelerate in-VM builds by registering it as a build
-          substituter (binary cache), so paths the host has already realised are copied into the
-          VM's store instead of rebuilt. Only meaningful with `nix.enable = true`. Read-only by
-          construction — the host store and its nix DB are attached as read-only 9p mounts and
-          registered as a `local?root=…` substituter; the host `/nix/store` is never written from the
-          VM (that would let the agent mutate the host's store), so this is a cache, not a writable
-          mount. The DB's db.sqlite is copied into a writable tmpfs dir in the VM (nix opens a store
-          DB read-write even to query it, so a plain ro mount can't be used). Exposing the host store
-          read-only does enlarge the host surface visible to the agent, but store paths are
-          content-addressed public packages, so the exposure is low-risk (design §3.11). Best-effort:
-          a path the host adds mid-session may miss and be rebuilt. Per-run: CCVM_NIX_HOST_CACHE=0|1.
+          Extra binary caches (nix substituters) for in-VM nix to pull pre-built paths from, instead
+          of rebuilding them. Only meaningful with `nix.enable = true`. Each entry is a substituter
+          URL — typically your own self-hosted cache of tweaked/private deps (attic, nix-serve, an S3
+          bucket, …). These are appended to the default `cache.nixos.org` (set a per-URL
+          `?priority=N` if you want to reorder), and pulled over HTTP at network speed — no mount, no
+          host-store exposure. Paths must verify against `trustedPublicKeys`, so signatures stay on
+          (require-sigs is NOT disabled). A PUBLIC-READ signed cache works with zero secrets; a cache
+          behind a token/netrc is not yet supported (ccvm carries no host credentials — a sanitized
+          netrc-staging path, like shareGitConfig, would be needed). Build-time (the URLs are baked
+          into the guest's nix.conf); no per-run env override.
+        '';
+      };
+
+      trustedPublicKeys = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = defaults.nix.trustedPublicKeys;
+        example = lib.literalExpression ''[ "cache.example.com:abc123…=" ]'';
+        description = ''
+          Public keys that verify paths fetched from `nix.substituters` (the `name:base64key` pairs
+          a self-hosted cache prints on setup). Appended to nixpkgs' built-in trusted keys. Without
+          the matching key, nix refuses a substituter's paths as untrusted — so set this alongside
+          `substituters`. Only meaningful with `nix.enable = true`.
         '';
       };
     };

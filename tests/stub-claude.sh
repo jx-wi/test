@@ -87,39 +87,20 @@ if [ -d /nix/.rw-store ]; then
   fi
 fi
 
-# nix.useHostStoreAsCache: the host /nix/store should be mounted READ-ONLY at the chroot-store
-# root /nix/.host-store/nix/store; nix.conf should carry the `local?root=…` substituter; and the
-# copied host DB should make paths in the ro store report VALID (which is what lets nix substitute
-# them). Report all three so boot.sh can assert the host-cache posture.
-if mountpoint -q /nix/.host-store/nix/store 2>/dev/null ||
-   { [ -d /nix/.host-store/nix/store ] && [ -n "$(ls -A /nix/.host-store/nix/store 2>/dev/null)" ]; }; then
-  echo "HOSTCACHE:mounted"
-  # ro: a write into the mount must fail.
-  if : 2>/dev/null >/nix/.host-store/nix/store/.ccvm-write-probe; then
-    rm -f /nix/.host-store/nix/store/.ccvm-write-probe 2>/dev/null
-    echo "HOSTCACHE:writable" # should NOT happen — the share must be ro
-  else
-    echo "HOSTCACHE:readonly"
-  fi
+# nix.substituters / nix.trustedPublicKeys: an extra binary cache configured via the option should
+# reach the guest's effective nix config — both the substituter URL and its trusted public key. The
+# boot test (nixSubst posture) asserts on these. (A real fetch is a network/human check;
+# example.invalid never resolves.) `nix config show`/`nix.conf` both name them.
+nixcfg="$( { nix config show 2>/dev/null || nix show-config 2>/dev/null || cat /etc/nix/nix.conf 2>/dev/null; } )"
+if grep -q 'https://cache.example.invalid' <<<"$nixcfg"; then
+  echo "SUBST:substituter-configured"
 else
-  echo "HOSTCACHE:absent"
+  echo "SUBST:substituter-missing"
 fi
-# nix.conf substituter (the chroot store). `nix show-config`/`nix.conf` both name it.
-if { nix config show 2>/dev/null || nix show-config 2>/dev/null || cat /etc/nix/nix.conf 2>/dev/null; } |
-   grep -q 'root=/nix/.host-store'; then
-  echo "HOSTCACHE:configured"
+if grep -q 'cache.example.invalid:0000000000000000000000000000000000000000000=' <<<"$nixcfg"; then
+  echo "SUBST:key-configured"
 else
-  echo "HOSTCACHE:unconfigured"
-fi
-# Real validity check: with the host DB copied into the chroot store, a path present in the ro host
-# store must be reported VALID via local?root=/nix/.host-store — exactly what lets nix substitute it
-# instead of rebuilding. Pick any store path the host carries and query it.
-hp="$(ls /nix/.host-store/nix/store 2>/dev/null | grep -m1 -E '^[a-z0-9]{32}-' || true)"
-if [ -n "$hp" ] &&
-   nix path-info --store "local?root=/nix/.host-store" "/nix/store/$hp" >/dev/null 2>&1; then
-  echo "HOSTCACHE:db-valid"
-else
-  echo "HOSTCACHE:db-invalid"
+  echo "SUBST:key-missing"
 fi
 
 # Egress probes (best-effort, short timeout). With open egress both reach; with the

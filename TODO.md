@@ -28,7 +28,13 @@ half-remembered context.
   on the host when ready, see #5). Done & committed:
   **#1–#13, #10(A+B+C), #14, #15** — i.e. the entire pre-public list is now clear (all KVM-verified).
   **#14** = internal `nixInVm`→`nix.enable` rename (boot.sh 31/31). **#15** = `nix.useHostStoreAsCache`
-  (host store as a ro build substituter via a `db.sqlite` copy; boot.sh 35/35, `HOSTCACHE:db-valid`).
+  (host store as a ro build substituter via a `db.sqlite` copy) — shipped & KVM-verified 2026-06-07,
+  then **REMOVED 2026-06-08** (solo-findings #2): 9p copy ran slower than downloading (<1 MiB/s vs.
+  network), it exposed the whole host store to the agent (isolation hole), and the cache audience
+  already runs a real binary cache. **Superseded by `nix.substituters` / `nix.trustedPublicKeys`** —
+  point in-VM nix at a binary cache over HTTP (signed, no host-store mount; boot.sh `nixSubst` posture,
+  `SUBST:substituter-configured`/`SUBST:key-configured`). Open follow-on: token/netrc-auth'd caches
+  need a sanitized netrc staged through the seed (modeled on `shareGitConfig`). See design §3.11 L2.
   Earlier recent commits (newest first):
   - `961f967` #10-B nixInVm (writable /nix/store overlay + in-VM nix; KVM-verified `nix build` works)
   - `d1bedcf` #10 storeDisk→vmDiskSize rename (single ephemeral disk pool, int GiB)
@@ -206,7 +212,12 @@ hits (only historical TODO mentions).
 
 ---
 
-## ✅ #15 Implement `useHostStoreAsCache` — host store as a read-only build substituter — DONE & KVM-VERIFIED 2026-06-07 (committed)
+## ⛔ #15 `useHostStoreAsCache` — host store as a read-only build substituter — SHIPPED 2026-06-07, then REMOVED 2026-06-08 (superseded by `nix.substituters`)
+
+> **REMOVED 2026-06-08 (see "Current state" + design §3.11 L2).** The history below is archival.
+> 9p copy was slower than downloading (<1 MiB/s vs. network), it exposed the whole host store to the
+> agent, and the cache audience already runs a real binary cache — replaced by `nix.substituters` /
+> `nix.trustedPublicKeys` (point in-VM nix at a binary cache over HTTP, signed, no host-store mount).
 
 **Status: DONE & KVM-VERIFIED 2026-06-07.** `nix flake check` clean + `bash tests/boot.sh` **35/35**,
 including all four `hostStoreCache` assertions: host store mounted, mount READ-ONLY, substituter in

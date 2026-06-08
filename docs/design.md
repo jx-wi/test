@@ -108,9 +108,9 @@ The guest root is a **tmpfs** (RAM), so every byte the agent writes outside the 
 lives only in guest memory and vanishes on power-off. The system closure is mounted
 **read-only** at `/nix/store` from a self-contained **squashfs** on a virtio-blk disk —
 always, for maximal isolation: nothing of the host store is exposed. This is the well-worn
-"erase your darlings" pattern, so first-boot risk is low. (Reusing the *host* store to
-accelerate in-VM builds is a separate, opt-in concern — a read-only build *substituter*,
-not a writable mount; see `nix.useHostStoreAsCache` in §3.11.)
+"erase your darlings" pattern, so first-boot risk is low. (To give in-VM nix extra pre-built
+paths, point it at a binary cache via `nix.substituters` / `nix.trustedPublicKeys`, §3.11 — HTTP
+substitution, not a host-store mount.)
 
 Boot is **direct kernel boot**: no bootloader. `mkccvm` extracts the kernel + initrd and
 hands QEMU `-kernel/-initrd/-append`. The initrd is the **systemd** one (the scripted
@@ -349,8 +349,8 @@ egress *anonymization* (how those packets reach the wire) belongs on the host.
 
 ### 3.11 Encrypted disk pool (`vmDiskSize`) + in-VM nix (`nix.enable`)
 
-> **Naming note.** The user-facing option is `programs.ccvm.nix.enable` (with a sibling
-> `nix.useHostStoreAsCache`, §"Remaining follow-ons"). This is now **one name end to end**: the
+> **Naming note.** The user-facing option is `programs.ccvm.nix.enable` (with siblings
+> `nix.substituters` / `nix.trustedPublicKeys`, §"Remaining follow-ons"). This is now **one name end to end**: the
 > internal config (`lib/defaults.nix`, `lib/mkccvm.nix`) and the guest module (`guest/default.nix`,
 > as `ccvm.nix.enable`) use the same nested `nix.enable` — the old internal `nix.enable` flag was unified
 > away. References to `nix.enable` below mean both the option and the internal mechanism.
@@ -420,14 +420,14 @@ pool**, not two disks:
   is an integer so `mkDefault 32` reads naturally, but the *baked default is `0`* — off wins over
   a default size, per the locked "opt-in" decision.)
 
-**Relationship to the host store (`nix.useHostStoreAsCache`).** These are complementary, not
-competing. If the multi-GB closure is *already realised in the host store*, the planned
-`nix.useHostStoreAsCache` will let in-VM nix pull those paths from the host store as a read-only
-build **substituter** (a cache — never a writable mount, so the agent can't mutate the host's
-store) instead of rebuilding them, at near-zero RAM cost. The encrypted scratch disk is for the
-orthogonal case: when the guest must **write** a large closure (or other large data) ephemerally
-and would otherwise exhaust RAM. (The host store is *never* the guest's own boot store — that is
-always the self-contained squashfs, §3.4.)
+**Relationship to binary caches (`nix.substituters`).** These are complementary, not competing. If
+the multi-GB closure is *already built and served by a binary cache* (e.g. your self-hosted cache),
+`nix.substituters` + `nix.trustedPublicKeys` let in-VM nix pull those paths over HTTP instead of
+rebuilding them, at near-zero RAM cost — signed, and exposing nothing of the host. The encrypted
+scratch disk is for the orthogonal case: when the guest must **write** a large closure (or other
+large data) ephemerally and would otherwise exhaust RAM. (The host store is *never* the guest's own
+boot store — that is always the self-contained squashfs, §3.4. Reusing the host store directly as a
+substituter was tried as `nix.useHostStoreAsCache` and removed — see "Remaining follow-ons" L2.)
 
 #### Implementation status & remaining plan
 
@@ -482,50 +482,39 @@ default initrd carries only squashfs/overlay/9p). Verified by `nix flake check`,
 disk-backed upper.
 
 **Remaining follow-ons (not blocking — `nix develop` with a disk works today):**
-- **L2 — `nix.useHostStoreAsCache` (host store as a build substituter) — IMPLEMENTED (DB copy) &
-  KVM-VERIFIED 2026-06-07.** The chosen mechanism is a read-only **substituter** (host
-  store as a binary cache: nix copies the needed paths into the VM's own store and registers them as
-  valid), *not* mounting the host store as the guest's `/nix/store` overlay lower. That overlay-lower
-  approach was **considered and rejected**: a bare FS mount gives path *presence* but not nix **DB**
-  validity, and it exposes the *entire* host store as the live store (weaker isolation). The
-  substituter is the standard, DB-consistent, better-isolated mechanism (nix surfaces only the paths a
-  build actually needs). It reads the host store over a ro 9p mount internally, as a cache source.
+- **L2 — host-store reuse: IMPLEMENTED as `nix.useHostStoreAsCache`, then REMOVED 2026-06-08;
+  SUPERSEDED by `nix.substituters` / `nix.trustedPublicKeys`.** The original idea: reuse the host
+  `/nix/store` to accelerate in-VM builds. It shipped (KVM-verified 2026-06-07) as a read-only
+  **substituter** — the wrapper attached host `/nix/store` + `/nix/var/nix/db` as ro 9p shares, the
+  guest mounted the store at the chroot root `/nix/.host-store` and copied the host DB's `db.sqlite`
+  into a `ccvm`-owned writable dir, registering `local?root=/nix/.host-store` (with `require-sigs=false`,
+  host paths being unsigned). The `db.sqlite` copy was chosen over a ro-mount / overlay / `load-db`
+  replay because the consumer is the non-root **agent** and nix opens a local DB read-write even to
+  query it (a ro mount can't create `big-lock`; an overlay copy-up is root-owned; a `load-db` replay of
+  a hundreds-of-MB DB was CPU-bound and **blocked sshd** under TCG).
 
-  **Mechanism (implemented).** The wrapper attaches the host `/nix/store` **and** the host nix DB
-  `/nix/var/nix/db` as **read-only** 9p shares (`readonly=on`, `mount_tag=ccvm-hoststore` /
-  `ccvm-hostnixdb`), gated on the baked `@HOSTSTORECACHE@` flag (from `nix.useHostStoreAsCache`; per-run
-  `CCVM_NIX_HOST_CACHE`) and a `nix-host-store-cache` seed marker. The guest mounts the store ro at the
-  chroot-store root `/nix/.host-store` (so `/nix/.host-store/nix/store` == the host store) and **copies**
-  the host DB's `db.sqlite` into a `ccvm`-owned writable dir at `/nix/.host-store/nix/var/nix/db`;
-  `nix.settings` registers `extra-substituters = [ "local?root=/nix/.host-store" ]` (+ `require-sigs =
-  false`, host paths being unsigned). A `local?root=…` chroot store keeps its logical storeDir
-  `/nix/store`, so paths match the guest store and substitute directly.
+  **Why it was removed (solo-findings #2 + design review).** Three problems, none fixable cheaply:
+  **(1) it was slower than the thing it replaced** — copying a path from the host store over 9p ran at
+  **<1 MiB/s** vs. ~177 Mbit/s downloading the same path from `cache.nixos.org`, so for anything on the
+  public cache it was a net loss. A `&priority=100` demotion stopped it shadowing the public cache, but
+  that only narrowed it to "paths no public cache serves." **(2) It punched a hole in the isolation
+  thesis** — exposing the *entire* host `/nix/store` read-only to the agent (build logs, accidentally
+  vendored secrets, the shape of everything ever built) for a sandbox whose whole pitch is "the agent
+  can't see your host." **(3) The audience it served already runs a real binary cache.** Anyone with a
+  meaningful pile of tweaked deps has a cache server; pointing the VM at *that* is cleaner, faster
+  (HTTP at line rate), signed (`require-sigs` stays on), and leaks nothing of the host. So the feature
+  served neither serious users (they have a cache) nor casual ones (download wins) — and cost the most
+  fragile code in the repo (the DB-copy dance) plus the host-store surface.
 
-  **Why a db.sqlite copy, not a ro mount / overlay / reginfo load (spike results, 2026-06-07).** The
-  consumer of the substituter is the **agent** (the non-root `ccvm` user), and nix opens a local store's
-  DB **read-write** even just to query it (it takes the `big-lock` lock file and uses sqlite WAL). Four
-  approaches were spiked/reasoned: **(a)** ro-mount the host DB → FAILS even as root: can't create
-  `big-lock` (`opening lock file ".../big-lock": Permission denied`). **(b)** `nix-store --dump-db` +
-  `--load-db` into a writable copy → works, but the host DB is large (217 MB / 24k paths on the dev box)
-  and the `load-db` *replay* is CPU-bound and slow under TCG — in the `Before=sshd` path it **blocked
-  sshd and timed out the boot** (confirmed: the guest reached the login prompt but sshd waited on the
-  blocked seed service). **(c)** overlay the ro host DB under a tmpfs upper → works *as root* (lazy
-  `db.sqlite` copy-up into the upper), but the overlay dir inherits the lower's `root:root` perms and
-  the copy-up is root-owned, so the **non-root agent can't open it RW** — same failure as (a) for the
-  real consumer. **(d, chosen)** copy `db.sqlite` (committed state) into a `ccvm`-owned writable tmpfs
-  dir: a flat ~tens-of-MB file copy (fast bulk I/O, not a replay), after which the agent opens a normal
-  writable local DB. Only the small `nix/var` tree is chowned to ccvm; the store **files** stay ro 9p
-  (world-readable; the agent only reads them). Best-effort: only `db.sqlite` is copied (its last
-  checkpoint), so a path the host left in the `-wal`, or adds mid-session, may miss and be rebuilt —
-  fine for a cache (the guest's own store DB is authoritative).
-
-  **Tests.** `host.sh` asserts the marker + that nothing secret is staged; `boot.sh` (the `nixCache`
-  posture) asserts the host store is mounted **read-only**, the substituter is in `nix.conf`, and a
-  host store path is reported **valid** via the chroot store (`HOSTCACHE:db-valid` — proves the DB copy
-  works and nix will substitute rather than rebuild). **KVM-verified 2026-06-07:** `nix flake check`
-  clean + `bash tests/boot.sh` 35/35 (all four `hostStoreCache` assertions), and boot succeeded — the
-  `db.sqlite` copy in the seed service is fast enough not to delay sshd (the (b) replay was the slow
-  part, now gone).
+  **Successor — `nix.substituters` / `nix.trustedPublicKeys`.** Pure guest-closure config: the
+  substituter URL(s) + trusted public key(s) bake into the guest's nix.conf (appended to
+  `cache.nixos.org` + nixpkgs' keys). No wrapper token, no seed marker, no 9p share — a binary cache is
+  HTTP substitution, not a mount. `require-sigs` stays ON (paths verify against the trusted keys). A
+  **public-read** signed cache works with zero secrets. **Open follow-on:** a cache behind a token/netrc
+  is unsupported (ccvm carries no host credentials); the clean future story is a sanitized `netrc`
+  staged through the seed, modeled on `shareGitConfig`'s credential-stripping staging. Tested by
+  `boot.sh`'s `nixSubst` posture (`SUBST:substituter-configured` / `SUBST:key-configured` assert both
+  reach the guest nix.conf). Like `mountHostNixStore` before it, **do not re-add the host-store mount.**
 
 **Tests as established:** `host.sh` host-side staging in `nix flake check`; `boot.nix` postures
 (`scratch` for the disk, `nix` for in-VM nix) + `stub-claude.sh` reports (`SCRATCH:*`,

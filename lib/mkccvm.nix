@@ -91,14 +91,13 @@ let
     platforms = lib.platforms.linux;
   };
 
-  # useHostStoreAsCache (design §3.11 "L2"): expose the host /nix/store to the guest as a read-only
-  # build substituter so in-VM `nix build`/`nix develop` reuse host-built paths instead of rebuilding.
-  # Build-time + baked (it changes guest nix.settings AND makes the wrapper attach the host store as a
-  # ro 9p share) — see @HOSTSTORECACHE@ below and guest/default.nix. Only meaningful with nix.enable;
-  # warn (not a hard assert — keeps `nix flake check` evaluable) if set without it, since there is then
-  # no in-VM nix to consume the cache.
-  wrapper = lib.warnIf (config.nix.useHostStoreAsCache && !config.nix.enable)
-    "ccvm: programs.ccvm.nix.useHostStoreAsCache has no effect without nix.enable = true (no in-VM nix to use the host-store cache)."
+  # nix.substituters / nix.trustedPublicKeys: extra binary caches for in-VM nix (e.g. your own
+  # self-hosted cache of pre-built deps). Pure guest-closure config — they flow through the `nix`
+  # attr into guest/default.nix's nix.settings, with no wrapper token or runtime plumbing (a binary
+  # cache is HTTP substitution, not a mount). Only meaningful with nix.enable; warn (not a hard
+  # assert — keeps `nix flake check` evaluable) if set without it, since there is then no in-VM nix.
+  wrapper = lib.warnIf (config.nix.substituters != [ ] && !config.nix.enable)
+    "ccvm: programs.ccvm.nix.substituters has no effect without nix.enable = true (no in-VM nix to use the extra binary caches)."
     (pkgs.writeShellApplication {
     name = "ccvm";
     inherit meta;
@@ -124,7 +123,6 @@ let
         "@EGRESSPORTS@"
         "@VERSION@"
         "@VMDISKSIZE@"
-        "@HOSTSTORECACHE@"
       ]
       [
         kernel
@@ -146,7 +144,6 @@ let
         (lib.concatStringsSep " " (map toString config.egressPorts))
         version
         (toString config.vmDiskSize)
-        (if config.nix.useHostStoreAsCache then "1" else "0")
       ]
       (builtins.readFile ../wrapper/ccvm.sh);
   });

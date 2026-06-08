@@ -122,14 +122,19 @@ in
           not OOM guest RAM.
         '';
       };
-      useHostStoreAsCache = lib.mkOption {
-        type = lib.types.bool;
-        default = false;
+      substituters = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
         description = ''
-          Reuse the host /nix/store as a read-only build substituter. DECLARED but not implemented
-          yet (design §3.11 L2); has no effect in the guest today. Declared here so mkccvm can pass
-          the whole nested `nix` attr through verbatim.
+          Extra binary caches (substituter URLs) for in-VM nix, appended to cache.nixos.org. Only
+          meaningful with nix.enable. Pure guest-closure config (no mount); paths must verify against
+          trustedPublicKeys. Passed through the nested `nix` attr by mkccvm.
         '';
+      };
+      trustedPublicKeys = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        description = "Public keys verifying paths from `substituters` (name:base64key). Appended to nixpkgs' built-in keys.";
       };
     };
   };
@@ -386,22 +391,16 @@ in
     # Mutable nix only when nix.enable is on (writable /nix/store overlay above). Off by default —
     # the store is read-only, so the channel/daemon machinery is skipped and the closure stays lean.
     nix.enable = cfg.nix.enable;
-    nix.settings = lib.mkIf cfg.nix.enable ({
+    nix.settings = lib.mkIf cfg.nix.enable {
       experimental-features = [ "nix-command" "flakes" ]; # `nix develop`/`nix build` on flakes
       trusted-users = [ "root" "ccvm" ]; # let the agent add substituters / build without sudo
-    }
-    # useHostStoreAsCache: register the read-only host store (mounted by launcher.nix at the
-    # chroot-store root /nix/.host-store, with the host nix DB overlaid there) as a build
-    # substituter, so in-VM nix copies paths the host already realised instead of rebuilding them.
-    # `local?root=…` is a chroot store: its logical storeDir stays /nix/store (so paths MATCH the
-    # guest store) while the files live under the root — exactly what we want for cache reuse.
-    # require-sigs=false because host-built paths are unsigned (a local trusted store, not an
-    # untrusted binary cache). If the host store/DB aren't present (cache off, or a fail-open at
-    # boot) the substituter just finds nothing to substitute — harmless.
-    // lib.optionalAttrs cfg.nix.useHostStoreAsCache {
-      extra-substituters = [ "local?root=/nix/.host-store" ];
-      extra-trusted-substituters = [ "local?root=/nix/.host-store" ];
-      require-sigs = false;
-    });
+      # Extra binary caches (nix.substituters / nix.trustedPublicKeys). Appended to the defaults
+      # (cache.nixos.org + nixpkgs' keys), reached over HTTP at network speed — a substituter is
+      # HTTP substitution, not a mount, so this needs no 9p share and exposes nothing of the host.
+      # Empty lists are a no-op. require-sigs stays ON: paths must verify against the trusted keys.
+      extra-substituters = cfg.nix.substituters;
+      extra-trusted-substituters = cfg.nix.substituters;
+      extra-trusted-public-keys = cfg.nix.trustedPublicKeys;
+    };
   };
 }

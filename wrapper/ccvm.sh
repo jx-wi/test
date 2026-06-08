@@ -29,7 +29,6 @@ EGRESSALLOW="@EGRESSALLOW@" # space-separated FQDN/IP/CIDR allowlist; empty = op
 EGRESSPORTS="@EGRESSPORTS@" # space-separated dst ports the allowlist permits (default 443)
 VERSION="@VERSION@"         # ccvm's own version string (baked from lib/mkccvm.nix)
 VMDISKSIZE="@VMDISKSIZE@"   # GiB; 0=off. >0 attaches an encrypted ephemeral disk pool (/scratch, …)
-HOSTSTORECACHE="@HOSTSTORECACHE@" # 1 = attach host /nix/store ro as an in-VM build substituter (nix.useHostStoreAsCache); 0 = off
 
 # ---- helpers ---------------------------------------------------------------
 warn() { printf 'ccvm: %s\n' "$*" >&2; }
@@ -68,7 +67,6 @@ flag wins over the env var):
   CCVM_CLAUDE_MD=<file>        alternate ccvm-context CLAUDE.md (empty disables it)
   CCVM_MLOCK=0|1               lock guest RAM so it can't reach host swap
   CCVM_MEMORY=<MiB>            guest RAM for this run
-  CCVM_NIX_HOST_CACHE=0|1      attach host /nix/store ro as an in-VM build cache (needs nix.enable)
   CCVM_ACCEL=tcg               force software emulation (no KVM)
   CCVM_MACHINE=<type>          QEMU machine type (default microvm on x86_64)
 
@@ -297,13 +295,6 @@ case "${CCVM_VM_DISK_SIZE:-__unset__}" in
   *) VMDISKSIZE="$CCVM_VM_DISK_SIZE" ;;
 esac
 
-# Host-store-cache precedence: CCVM_NIX_HOST_CACHE overrides the baked nix.useHostStoreAsCache
-# for one run (1 = attach the host /nix/store ro as a build substituter; 0 = off).
-case "${CCVM_NIX_HOST_CACHE:-}" in
-  1 | true | yes) HOSTSTORECACHE=1 ;;
-  0 | false | no) HOSTSTORECACHE=0 ;;
-esac
-
 # Guest RAM precedence: CCVM_MEMORY (MiB) overrides the baked `memory` default for one run.
 # Memory is a runtime QEMU arg (no rebuild), so a heavy project can ask for more without
 # touching config: CCVM_MEMORY=16384 ccvm … . Resolved before the mlock preflight, which
@@ -524,36 +515,6 @@ if [[ $VMDISKSIZE != 0 ]]; then
   printf '1' >"$SEED/vm-disk"
 fi
 
-# ---- host /nix/store as a read-only build cache (opt-in: nix.useHostStoreAsCache) ----
-# Expose the host's /nix/store to the guest as READ-ONLY 9p shares so in-VM nix can reuse paths the
-# host has already realised (a build substituter) instead of rebuilding them. The guest mounts the
-# store at a SIDE path (/nix/.host-store) — NEVER as the live /nix/store — and registers it as a
-# substituter (see guest/default.nix); the guest's own boot store is always the squashfs (§3.4).
-# Strictly read-only (readonly=on): the in-VM agent must never be able to mutate the host's real
-# store — that would break the trust boundary. Store paths are content-addressed PUBLIC packages, so
-# ro exposure is the accepted cost; nothing secret rides these shares — no keys, no write access.
-# We share TWO things: the store files, and the nix path-validity DB (/nix/var/nix/db). The DB is
-# needed so nix trusts the host paths as valid; the guest overlays it (ro lower + tmpfs upper) so it
-# can open the DB without a slow dump+load-db (design §3.11 L2). Only meaningful with nix.enable.
-HOSTSTORE_ARGS=()
-if [[ $HOSTSTORECACHE == 1 ]]; then
-  if [[ -d /nix/store ]]; then
-    HOSTSTORE_ARGS+=(-fsdev "local,id=hoststore,path=/nix/store,security_model=none,readonly=on")
-    HOSTSTORE_ARGS+=(-device "virtio-9p-$BUS,fsdev=hoststore,mount_tag=ccvm-hoststore")
-    printf '1' >"$SEED/nix-host-store-cache"
-    # The DB is what makes paths substitutable. Share it ro too when present; if the host has no nix
-    # DB (e.g. a store image with no daemon DB) the cache still mounts but paths won't substitute.
-    if [[ -d /nix/var/nix/db ]]; then
-      HOSTSTORE_ARGS+=(-fsdev "local,id=hostnixdb,path=/nix/var/nix/db,security_model=none,readonly=on")
-      HOSTSTORE_ARGS+=(-device "virtio-9p-$BUS,fsdev=hostnixdb,mount_tag=ccvm-hostnixdb")
-    else
-      warn "host has /nix/store but no /nix/var/nix/db — host-store cache mounted but paths won't substitute"
-    fi
-  else
-    warn "nix.useHostStoreAsCache is on but the host has no /nix/store — skipping the host-store cache"
-  fi
-fi
-
 # ---- git config passthrough (default on) -----------------------------------
 # Native devex: in-VM `git` should commit as you, with your aliases and global ignores —
 # like native claude. We stage a SANITIZED copy of your GLOBAL git config into the seed (the
@@ -695,7 +656,6 @@ QEMU_ARGS=(
   "${CONFIG_ARGS[@]}"
   "${PROJECTS_ARGS[@]}"
   "${SCRATCH_ARGS[@]}"
-  "${HOSTSTORE_ARGS[@]}"
   -device "virtio-rng-$BUS"
   -display none
   -monitor none
