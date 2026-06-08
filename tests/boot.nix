@@ -24,6 +24,10 @@ in
   # Opt-in encrypted disk pool; the stub asserts /scratch is a writable dm-crypt mount.
   # 1 GiB leaves room for the LUKS header + an ext4 (sparse, so it costs ~nothing on disk).
   scratch = mk { vmDiskSize = 1; };
+  # persistClaudeProjects: mounts the host ~/.claude/projects read-WRITE. The stub writes a marker
+  # there (must reach the host) and one at the ~/.claude root (must NOT — projects-only scope), so
+  # boot.sh asserts both the write-back functionality and that nothing outside projects/ persists.
+  persist = mk { persistClaudeProjects = true; };
   # In-VM nix: the stub asserts /nix/store is a writable overlay and `nix` is present. Builds a
   # bigger guest closure (nix.enable), so this posture is slower to build the first time.
   nix = mk { nix.enable = true; };

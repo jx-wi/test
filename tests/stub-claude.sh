@@ -17,6 +17,18 @@ fi
 [ -r "$HOME/.claude/settings.json" ] && echo "CONFIG:settings-readable"
 [ -e "$HOME/.claude/.credentials.json" ] && echo "CONFIG:credential-present"
 
+# persistClaudeProjects: in the persist posture ~/.claude/projects is a read-WRITE 9p mount of the
+# host's projects dir — and ONLY that subpath (the credential at the ~/.claude root is never
+# mounted). Write a marker INSIDE projects/ (must reach the host) and one at the ~/.claude ROOT
+# (must NOT — it's the ephemeral overlay/tmpfs), so boot.sh asserts both write-back AND the scope.
+mkdir -p "$HOME/.claude/projects" 2>/dev/null
+if echo "CCVM-PERSIST-MARKER" >"$HOME/.claude/projects/ccvm-persist-probe" 2>/dev/null; then
+  echo "PERSIST:wrote-projects"
+else
+  echo "PERSIST:projects-writefail"
+fi
+echo "CCVM-ROOT-MARKER" >"$HOME/.claude/ccvm-root-probe" 2>/dev/null || true
+
 # ccvm-context global memory (extraClaudeMd): should be laid at ~/.claude/CLAUDE.md, carrying
 # the baked blurb and the runtime mode line. Report so boot.sh can assert it survived a boot.
 if [ -r "$HOME/.claude/CLAUDE.md" ]; then

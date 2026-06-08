@@ -25,6 +25,7 @@ echo "building stub-claude ccvm wrappers (builds the guest closure; first run is
 WRAP="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix open)/bin/ccvm"
 WRAP_EGRESS="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix egress)/bin/ccvm"
 WRAP_SCRATCH="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix scratch)/bin/ccvm"
+WRAP_PERSIST="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix persist)/bin/ccvm"
 WRAP_NIX="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix nix)/bin/ccvm"
 WRAP_NIXDISK="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix nixDisk)/bin/ccvm"
 WRAP_NIXSUBST="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix nixSubst)/bin/ccvm"
@@ -236,6 +237,26 @@ grep -qa '^SUBST:key-configured$' <<<"$OUT" &&
   ok "substituters: trusted public key reaches the guest nix.conf (signatures stay verified)" ||
   no "substituters: trusted public key not in guest nix.conf: $(grep -a '^SUBST:' <<<"$OUT")"
 rm -rf "$PROJ_SUB"
+
+# ---- persistClaudeProjects: a guest write to ~/.claude/projects lands on the host ----------
+# The persist posture mounts the host ~/.claude/projects (here: $FIXTURE_HOME/.claude/projects)
+# read-WRITE. Assert the FUNCTIONAL guarantee that host.sh can't (it never boots): a guest write
+# under projects/ actually reaches the host, AND the scope holds — a write at the ~/.claude ROOT
+# stays ephemeral (only projects/ is mounted, so the credential there can never be written back).
+PROJ_PER="$(mktemp -d)"
+HOST_PROJ="$FIXTURE_HOME/.claude/projects"
+rm -rf "$HOST_PROJ" "$FIXTURE_HOME/.claude/ccvm-root-probe"
+OUT="$(run_capture "$WRAP_PERSIST" "$PROJ_PER")"
+grep -qa '^PERSIST:wrote-projects$' <<<"$OUT" &&
+  ok "persistClaudeProjects: guest wrote into ~/.claude/projects (rw mount)" ||
+  no "persistClaudeProjects: guest could not write ~/.claude/projects: $(grep -a '^PERSIST:' <<<"$OUT")"
+grep -q 'CCVM-PERSIST-MARKER' "$HOST_PROJ/ccvm-persist-probe" 2>/dev/null &&
+  ok "persistClaudeProjects: the write PERSISTED back to the host projects dir" ||
+  no "persistClaudeProjects: guest write did NOT reach the host (persistence broken)"
+[ ! -e "$FIXTURE_HOME/.claude/ccvm-root-probe" ] &&
+  ok "persistClaudeProjects: a write at the ~/.claude ROOT did NOT persist (projects-only scope holds)" ||
+  no "persistClaudeProjects: a ~/.claude ROOT write reached the host — scope leak (credential path at risk)"
+rm -rf "$PROJ_PER" "$HOST_PROJ" "$FIXTURE_HOME/.claude/ccvm-root-probe"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
