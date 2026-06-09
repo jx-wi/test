@@ -179,9 +179,21 @@ reopening one needs a *new* reason, not a rediscovery of the old trade-off.
   The nftables ruleset is installed by a root systemd unit, but a root agent in the same guest could
   `nft flush` it (verified trivially). That is why setting `egressAllowlist` auto-drops the agent's
   sudo (`agentSudo`), raising the bar from one command to a guest-kernel exploit. The *complete* fix
-  is **host-side egress enforcement** (QEMU's slirp behind a host netns + nftables, or a filtering
-  proxy) — outside the guest entirely; deliberately not built yet (it reopens the zero-host-setup
-  goal), with the `agentSudo` drop as the pragmatic interim.
+  is **host-side egress enforcement**, and it's been **prototyped and proven feasible fully
+  unprivileged** (a process in the namespace reached an allowlisted host while every other
+  destination was dropped). The validated design: run QEMU in an `unshare --user --net
+  --map-current-user` namespace, give that namespace a *filtered* uplink via an **external**
+  `pasta`/`slirp4netns` (attached with `--userns`/`--netns`), and put the allowlist nft **inside the
+  namespace**. The guest — even guest-root, even a guest-kernel LPE — cannot reach those rules; only
+  a full QEMU escape can. **Two traps make this expensive to rediscover:** (1) preserving the uid via
+  `--map-current-user` is *mandatory* — pasta's own default (and a plain userns) remaps the user to
+  root, which breaks 9p `security_model=none` workspace ownership; and `--runas` can't substitute,
+  because the same process must also hold `CAP_NET_ADMIN` to install the nft. (2) it's a two-process
+  orchestration (an `exec unshare` inner that keeps the PID + TTY foreground for `ssh -tt`, plus an
+  external pasta attached by `/proc/$PID/ns/*`, with a ready/uplink handshake and dual cleanup) that
+  reworks the delicate boot/connect/teardown path — so it lands as its own focused, boot-tested
+  change, with a human `--shell` pass for the TTY (which `boot.sh` can't cover). `agentSudo` is the
+  in-guest interim until then (it already raises exfil from one command to a guest-kernel exploit).
 - **Encrypted disk, not a plain ephemeral one.** Wipe-on-exit must survive a crash that skips
   the cleanup trap, and on modern storage plain deletion ≠ erasure (async SSD TRIM, CoW
   snapshots retain freed blocks). With FDE the key dies with guest RAM at power-off, so the image
