@@ -193,15 +193,20 @@ reopening one needs a *new* reason, not a rediscovery of the old trade-off.
       uid 0, so QEMU's 9p view reports the workspace as uid 0 and the agent must then *also* run as
       guest-uid-0 for rw to work. `--runas` can't bridge it (the process needs caps **and** the right
       uid at once).
-  Two ways out, both real work: **(a)** require host `/etc/subuid` + `newuidmap` (setuid helper) to
-  map a uid *range* — uid 0 (caps) and the real uid (9p) in one userns; clean, but host setup; or
-  **(b)** `--map-root` + run the in-guest agent as uid 0 in this mode (safe: host-side egress holds
-  regardless of guest root) + teach the seed/launcher to remap accordingly — no host setup, but a
-  guest-side semantic change to validate by nested boot. Plus the orchestration itself (external
-  pasta, ready/uplink handshake, TTY-foreground `ssh -tt`, dual cleanup) is a delicate boot-path
-  rework needing a human `--shell` pass. **`agentSudo` is the shipped interim** — it already raises
-  exfil from one `sudo` to a guest-kernel exploit; host-side enforcement would raise it to a full
-  QEMU escape. Don't re-attempt this without resolving (a)-vs-(b) first.
+  Two ways out were considered. **(b) is RULED OUT:** `--map-root` + running the in-guest agent as
+  uid 0 would keep 9p consistent, but **claude-code hard-refuses `--dangerously-skip-permissions`
+  when euid==0** ("cannot be used with root/sudo privileges for security reasons" — verified) — and
+  that flag is ccvm's flagship. So the agent must NOT be uid 0, which rules out the whole map-root
+  family. That leaves **(a):** host `/etc/subuid` + `newuidmap` (a setuid helper) to map a uid
+  *range*, so one userns can hold uid 0 (for nft's `CAP_NET_ADMIN`) AND the real uid (QEMU runs there
+  → native 9p, agent stays non-root). Clean and correct, but it needs **host setup**, which cuts
+  against ccvm's "works as a normal user, zero setup" principle. Plus the orchestration itself
+  (external pasta attached by `/proc/$PID/ns/*`, ready/uplink handshake, TTY-foreground `ssh -tt`,
+  dual cleanup, then `setpriv`-drop QEMU to the real uid) is a delicate boot-path rework needing a
+  human `--shell` pass. **Net: host-side enforcement is only viable as (a), gated on host subuid
+  setup.** `agentSudo` is the shipped interim and already raises exfil from one `sudo` to a
+  guest-kernel exploit; (a) would raise it to a full QEMU escape — a marginal gain for real setup
+  cost, so it stays opt-in/future unless someone needs that last increment. Don't re-attempt map-root.
 - **Encrypted disk, not a plain ephemeral one.** Wipe-on-exit must survive a crash that skips
   the cleanup trap, and on modern storage plain deletion ≠ erasure (async SSD TRIM, CoW
   snapshots retain freed blocks). With FDE the key dies with guest RAM at power-off, so the image
