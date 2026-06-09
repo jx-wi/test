@@ -198,6 +198,16 @@ else
   ok "wrapper never uses SetEnv"
 fi
 
+# Static: QEMU is launched inside its seccomp sandbox, so a device-emulation/9p/slirp escape hits a
+# seccomp wall instead of running with the launching user's full privileges. Match the option value
+# (commas) so it can't be satisfied by the surrounding prose comment.
+grep -q 'obsolete=deny,elevateprivileges=deny' "$CCVM" && ok "wrapper confines QEMU with -sandbox on" ||
+  no "wrapper does not pass -sandbox on to QEMU"
+# Static: the wrapper refuses to run as host root (9p passthrough security_model=none would let the
+# guest create root-owned/setuid files on the host workspace).
+grep -q 'refusing to run as root' "$CCVM" && ok "wrapper guards against running as host root" ||
+  no "wrapper has no host-root guard"
+
 # ===========================================================================
 # 8. shareGitConfig staging: identity/aliases/ignores carried, but host-only
 #    /nix/store tool paths, credentials and signing are sanitized out.

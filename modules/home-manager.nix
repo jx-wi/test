@@ -14,7 +14,7 @@ let
     inherit (cfg)
       package writableCwd memory cores acceleration extraPackages
       apiKeyVariable shareClaudeConfig persistClaudeProjects shareGitConfig extraClaudeMd
-      lockGuestMemory vmDiskSize egressAllowlist egressPorts extraGuestModules
+      agentSudo lockGuestMemory vmDiskSize egressAllowlist egressPorts extraGuestModules
       # programs.ccvm.nix.{enable,substituters,trustedPublicKeys} passes straight through — the
       # internal config and the guest use the SAME nested `nix` name (no nixInVm mapping anymore).
       nix;
@@ -218,6 +218,26 @@ in
         ''${XDG_CACHE_HOME:-~/.cache}/ccvm by default (override CCVM_SCRATCH_DIR); a tmpfs target is
         refused unless CCVM_SCRATCH_ALLOW_TMPFS=1. Sparse, so it only consumes what's written up to
         the cap. Per-run override: CCVM_VM_DISK_SIZE=<GiB>|0.
+      '';
+    };
+
+    agentSudo = lib.mkOption {
+      type = lib.types.nullOr lib.types.bool;
+      default = defaults.agentSudo;
+      example = false;
+      description = ''
+        Whether the in-VM agent (the `ccvm` user) has passwordless root (wheel + sudo).
+        - `null` (default): AUTO — passwordless root is ON for DevEx and `--shell` debugging, but
+          turns OFF automatically whenever `egressAllowlist` is set. This is load-bearing: the egress
+          firewall runs *inside* the guest, so a root agent could otherwise simply `nft flush` it and
+          exfiltrate freely. Dropping the agent's root closes that bypass while leaving the firewall
+          (installed by a root systemd unit, not the agent) fully in force.
+        - `true`: force passwordless root on even with an allowlist — you accept that the in-guest
+          firewall is then agent-bypassable (only sensible behind host-side egress control).
+        - `false`: force it off — the agent cannot sudo; the in-guest firewall holds.
+        Build-time (rebuilds the guest closure). This is the IN-GUEST mitigation; a determined agent
+        could still attempt a guest-kernel exploit, so the complete fix for hostile egress is
+        host-side enforcement outside the guest entirely.
       '';
     };
 

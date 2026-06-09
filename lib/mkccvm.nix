@@ -29,6 +29,16 @@ let
   config = (defaults // userConfig) // {
     nix = defaults.nix // (userConfig.nix or { });
   };
+
+  # agentSudo resolution. null (the default) = AUTO: keep passwordless root in the guest for DevEx,
+  # EXCEPT when an egress allowlist is set — then drop the agent's trivial root path so a (prompt-
+  # injected) agent cannot `nft flush` the in-guest egress firewall. The firewall is installed by a
+  # root systemd oneshot (guest/launcher.nix), NOT the agent, so dropping the agent's sudo leaves
+  # enforcement fully intact while removing the bypass. An explicit true/false overrides the auto
+  # choice. Guest-build-time only (flips a NixOS option, rebuilds the closure) — no wrapper @TOKEN@,
+  # no runtime plumbing. This is the IN-GUEST mitigation; host-side egress enforcement (outside the
+  # guest's control entirely) is the complete fix — see CLAUDE.md, "Egress: an allowlist, not Tor".
+  agentSudoEnabled = if config.agentSudo == null then (config.egressAllowlist == [ ]) else config.agentSudo;
   system = pkgs.stdenv.hostPlatform.system;
 
   # The wrapper is arch-specific: pick the matching qemu-system binary and a default
@@ -47,6 +57,7 @@ let
         ccvm = {
           inherit (config) apiKeyVariable extraPackages nix;
           claudePackage = config.package;
+          agentSudo = agentSudoEnabled;
         };
       }
     ]

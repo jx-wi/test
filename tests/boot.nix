@@ -19,7 +19,9 @@ in
 {
   open = mk { };
   # Allowlist example.com only; the stub probes both it (must reach) and a non-listed host
-  # (must be blocked). api.anthropic.com is auto-included by the builder regardless.
+  # (must be blocked). api.anthropic.com is auto-included by the builder regardless. Setting
+  # egressAllowlist also AUTO-DROPS the agent's sudo (agentSudo auto), so this posture doubles as the
+  # check that a hardened-egress guest can't flush its own firewall (boot.sh asserts SUDO:dropped).
   egress = mk { egressAllowlist = [ "example.com" ]; egressPorts = [ 443 ]; };
   # Opt-in encrypted disk pool; the stub asserts /scratch is a writable dm-crypt mount.
   # 1 GiB leaves room for the LUKS header + an ext4 (sparse, so it costs ~nothing on disk).

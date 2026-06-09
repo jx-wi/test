@@ -136,6 +136,14 @@ grep -qa '^STORE:readonly$' <<<"$OUT" &&
   no "default: /nix/store not read-only: $(grep -a '^STORE:' <<<"$OUT")"
 grep -qa '^NIX:absent$' <<<"$OUT" &&
   ok "default: nix is absent from the guest (lean closure)" || no "default: nix unexpectedly present"
+# agentSudo (auto): with no egress allowlist the default keeps passwordless root for DevEx/debugging.
+grep -qa '^SUDO:available$' <<<"$OUT" &&
+  ok "default: passwordless sudo available in the guest (debug DevEx preserved)" ||
+  no "default: sudo unexpectedly dropped: $(grep -a '^SUDO:' <<<"$OUT")"
+# The workspace 9p mount carries nosuid,nodev (defense in depth on the host-shared tree).
+grep -qa '^WS:hardened$' <<<"$OUT" &&
+  ok "rw mode: workspace 9p mount carries nosuid,nodev" ||
+  no "rw mode: workspace 9p mount not hardened: $(grep -a '^WS:' <<<"$OUT")"
 rm -rf "$PROJ_RW"
 
 # ---- overlay (--read-only-cwd): the write stays in the VM -----------
@@ -159,6 +167,12 @@ grep -qa '^EGRESS:allowed:reachable$' <<<"$OUT" &&
 grep -qa '^EGRESS:denied:blocked$' <<<"$OUT" &&
   ok "egress allowlist: non-allowlisted host blocked" ||
   no "egress: non-allowlisted host NOT blocked — exfil channel open: $(grep -a '^EGRESS:' <<<"$OUT")"
+# Setting egressAllowlist auto-drops the agent's sudo (agentSudo auto), so a prompt-injected agent
+# can't `nft flush` the in-guest firewall to reopen egress. This is the C-1 mitigation — assert root
+# is actually gone (the firewall itself, installed by a root systemd unit, is checked above).
+grep -qa '^SUDO:dropped$' <<<"$OUT" &&
+  ok "egress-hardened: agent sudo dropped (in-guest firewall can't be flushed by the agent)" ||
+  no "egress-hardened: agent still has sudo — firewall is agent-bypassable: $(grep -a '^SUDO:' <<<"$OUT")"
 rm -rf "$PROJ_EG"
 
 # ---- vmDiskSize: /scratch is a writable, dm-crypt-backed mount --------------

@@ -22,6 +22,7 @@
   persistClaudeProjects = false; # persist ~/.claude/projects back to the host (resume + memory)
   shareGitConfig = true; # stage a sanitized host git config so in-VM git commits as you
   extraClaudeMd = builtins.readFile ./ccvm-context.md; # guest ~/.claude/CLAUDE.md ("you're in ccvm")
+  agentSudo = null; # null=auto: passwordless root in the guest, but DROPPED when egressAllowlist is set (so the agent can't `nft flush` the in-guest egress firewall). true/false forces it. Resolved in mkccvm.nix
   lockGuestMemory = false; # mlock guest RAM so it can't reach host swap
   vmDiskSize = 0; # GiB; 0=off. >0 attaches an encrypted ephemeral disk pool (/scratch; later writable store)
   egressAllowlist = [ ]; # opt-in egress allowlist; empty = open egress (native default)

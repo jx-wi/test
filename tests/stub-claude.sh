@@ -6,6 +6,22 @@ echo "CWD:$PWD"
 # The agent's uid: the guest remaps the ccvm user to the host uid so 9p passthrough gives
 # correct workspace ownership. The host asserts this equals its own `id -u`.
 echo "UID:$(id -u)"
+# agentSudo: with it dropped (auto when egressAllowlist is set) the agent (ccvm) is not in wheel and
+# sudo is disabled, so a prompt-injected agent can't flush the in-guest egress firewall. Report
+# whether passwordless root is actually available so boot.sh can assert per posture.
+if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+  echo "SUDO:available"
+else
+  echo "SUDO:dropped"
+fi
+# 9p shares should carry nosuid,nodev (defense in depth). Check the workspace (the guest CWD in rw
+# mode is the 9p share itself; in overlay mode it's the overlay, so this line is asserted only for rw).
+wsopts=",$(awk -v d="$PWD" '$2==d {print $4; exit}' /proc/self/mounts 2>/dev/null),"
+if [ "$wsopts" != ",," ] && [ "${wsopts#*,nosuid,}" != "$wsopts" ] && [ "${wsopts#*,nodev,}" != "$wsopts" ]; then
+  echo "WS:hardened"
+else
+  echo "WS:plain"
+fi
 # Try to write into the workspace (the guest CWD == the host project path). In rw mode this
 # reaches the host; in overlay mode it lands in the tmpfs upper and never does.
 if echo "guest-wrote-$$" >./ccvm-boot-write 2>/dev/null; then

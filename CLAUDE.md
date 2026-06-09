@@ -39,10 +39,13 @@ whole project tree, and **exfiltrate either over open egress**. "Never copied to
 protects the host from *persistence*, not the agent from *reading shared inputs*. So the
 out-of-the-box win is **containment** (no host access beyond the CWD, nothing persists), **not
 exfiltration resistance** — a deliberate DevEx choice, not a bug. The primary hardening knob is
-`egressAllowlist` (default-deny egress; the API stays reachable); the strongest stance is
-`shareClaudeConfig=false` + API-key auth, so the OAuth token never enters the VM at all. Keep
-this distinction accurate in user-facing docs — under-stating it is the one thing that turns a
-sandbox into a liability.
+`egressAllowlist` (default-deny egress; the API stays reachable) — but its firewall is enforced
+**inside the guest**, so it only binds an agent that isn't guest-root. Setting `egressAllowlist`
+therefore also **auto-drops the agent's sudo** (`agentSudo` auto), so a prompt-injected agent
+can't just `nft flush` the rules; the *complete* fix is host-side egress enforcement (not built
+yet — see "Egress: an allowlist, not Tor"). The strongest stance is `shareClaudeConfig=false` +
+API-key auth, so the OAuth token never enters the VM at all. Keep this distinction accurate in
+user-facing docs — under-stating it is the one thing that turns a sandbox into a liability.
 
 - **API key never touches disk/argv/kernel-cmdline.** It travels only over the SSH channel
   via `SendEnv`→`AcceptEnv`. Use `SendEnv`, **never** `SetEnv` (SetEnv puts it on the
@@ -82,6 +85,14 @@ sandbox into a liability.
 - **`writableCwd=false` means genuinely read-only.** The host tree is the 9p **lower**;
   edits land in a tmpfs **upper** and must not reach the host.
 - **Only the CWD is shared.** No `~/.ssh`, `~/.aws`, or home dir crosses the boundary.
+- **QEMU is sandboxed; ccvm never runs as host root; 9p shares are `nosuid,nodev`.** QEMU launches
+  with `-sandbox on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny` so a
+  device-emulation/9p/slirp escape of the trust boundary hits a seccomp wall instead of the
+  launching user's full privileges (`CCVM_QEMU_SANDBOX=0` is the escape hatch). The wrapper refuses
+  host uid 0 — 9p `security_model=none` passthrough as root would let the guest create
+  root-owned/setuid files on the host workspace (`CCVM_ALLOW_ROOT=1` overrides). Every 9p share is
+  mounted `nosuid,nodev` (deliberately not `noexec` — the workspace and a shared `~/.claude` need
+  exec). Don't regress any of the three.
 
 ## Deliberate defaults — do not reverse
 
@@ -115,6 +126,12 @@ sandbox into a liability.
   vs. network), it punched a hole in the isolation thesis (exposed the *entire* host store ro to the
   agent), and the audience that benefits from caching already runs a real binary cache — which the
   `substituters` option serves cleanly.
+- **`agentSudo` is auto, not a fixed default.** The agent has passwordless root in the guest (DevEx,
+  `--shell` debugging) EXCEPT when `egressAllowlist` is set, where it auto-drops so the in-guest
+  egress firewall can't be flushed by the agent (the firewall is installed by a root systemd unit,
+  not the agent, so enforcement survives the drop). `null` = auto; `true`/`false` force it. It's the
+  in-guest half of egress containment — don't quietly flip it back to always-on without an equivalent
+  guarantee (host-side enforcement). Build-time (rebuilds the guest closure).
 - **`extraClaudeMd` is default-on context, not a flag.** A built-in blurb is staged as the
   guest's `~/.claude/CLAUDE.md` (via the seed, **appended** to any host-shared one — never
   clobbering it) so the agent knows it's in ccvm. It must stay seed-delivered, never become
@@ -158,6 +175,13 @@ reopening one needs a *new* reason, not a rediscovery of the old trade-off.
   rotating mid-session breaks calls, so restart or pin a CIDR); **DNS tunneling** (DNS is pinned
   to the slirp stub resolver, blocking DNS-to-anywhere, but low-bandwidth tunneling through the
   recursive resolver remains); **TCP-only** (QUIC/UDP 443 is dropped; clients fall back to TCP).
+  And the load-bearing caveat: **enforcement lives in the guest, so it only binds a non-root agent.**
+  The nftables ruleset is installed by a root systemd unit, but a root agent in the same guest could
+  `nft flush` it (verified trivially). That is why setting `egressAllowlist` auto-drops the agent's
+  sudo (`agentSudo`), raising the bar from one command to a guest-kernel exploit. The *complete* fix
+  is **host-side egress enforcement** (QEMU's slirp behind a host netns + nftables, or a filtering
+  proxy) — outside the guest entirely; deliberately not built yet (it reopens the zero-host-setup
+  goal), with the `agentSudo` drop as the pragmatic interim.
 - **Encrypted disk, not a plain ephemeral one.** Wipe-on-exit must survive a crash that skips
   the cleanup trap, and on modern storage plain deletion ≠ erasure (async SSD TRIM, CoW
   snapshots retain freed blocks). With FDE the key dies with guest RAM at power-off, so the image

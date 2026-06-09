@@ -15,7 +15,10 @@ let
   # 9p mount options shared by every share. msize=1M keeps 9p throughput tolerable
   # for editing source trees; access=any + security_model=none on the host side means
   # host uids pass straight through (uid 1000 host == ccvm in the guest).
-  p9 = "trans=virtio,version=9p2000.L,msize=1048576,access=any";
+  # nosuid,nodev: defense in depth on every host-shared tree — the guest must never honour a
+  # setuid bit or device node coming off 9p. (noexec is deliberately NOT set: the workspace has to
+  # run project binaries / build scripts, and a shared ~/.claude may carry executable hooks/skills.)
+  p9 = "trans=virtio,version=9p2000.L,msize=1048576,access=any,nosuid,nodev";
 
   claudeBin = if cfg.claudePackage != null then "${cfg.claudePackage}/bin/claude" else "claude";
 

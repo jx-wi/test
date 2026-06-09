@@ -104,6 +104,17 @@ in
       default = [ ];
       description = "Extra packages available inside the guest.";
     };
+    agentSudo = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Whether the agent user (ccvm) gets passwordless root (wheel + sudo) in the guest. The host
+        wrapper RESOLVES this from the user-facing tri-state (lib/mkccvm.nix): on by default for
+        DevEx, off when an egress allowlist is set so a (prompt-injected) agent cannot flush the
+        in-guest egress firewall. Off removes ccvm from wheel and disables sudo entirely; the root
+        systemd units (seed setup, firewall install) run regardless and are unaffected.
+      '';
+    };
     # NOTE: host-config sharing is driven entirely by the wrapper + the `seed/share-claude-config`
     # flag (read by launcher.nix), NOT by a guest option — so there is deliberately no
     # `shareClaudeConfig` option here. The host-side default lives in lib/mkccvm.nix and is
@@ -309,10 +320,16 @@ in
       isNormalUser = true;
       uid = 1000;
       group = "users";
-      extraGroups = [ "wheel" ];
+      # wheel (→ passwordless sudo) only when agentSudo is on. Dropped under egress hardening so a
+      # prompt-injected agent can't `nft flush` the in-guest egress firewall (guest/launcher.nix).
+      extraGroups = lib.optional cfg.agentSudo "wheel";
       shell = pkgs.zsh;
     };
-    # Ephemeral VM: passwordless sudo is fine and helps debugging in --shell mode.
+    # Ephemeral VM: passwordless sudo is fine and helps debugging in --shell mode — but it also lets
+    # a root agent flush the egress firewall, so agentSudo=false (auto when egressAllowlist is set)
+    # disables sudo outright. mkDefault so an extraGuestModule can still re-enable it if a workflow
+    # genuinely needs in-guest sudo.
+    security.sudo.enable = lib.mkDefault cfg.agentSudo;
     security.sudo.wheelNeedsPassword = false;
 
     programs.zsh = {

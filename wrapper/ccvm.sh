@@ -313,6 +313,16 @@ fi
 WORKDIR="$PWD"
 [[ -d $WORKDIR ]] || die "current directory '$WORKDIR' is not a directory"
 
+# Refuse to run as host root. The workspace 9p share uses security_model=none (passthrough), so the
+# file ops the guest performs execute with QEMU's host privileges — as root that lets a (prompt-
+# injected) guest agent create root-owned / setuid-root files on the host workspace, i.e. host
+# privilege escalation. Skip under the dry-run test hook (no VM, no 9p mount), so the host-side
+# tests don't depend on the builder's uid. CCVM_ALLOW_ROOT=1 overrides for the rare case where it
+# genuinely doesn't apply (e.g. a rootless-container "host").
+if [[ $DRYRUN != 1 && ${CCVM_ALLOW_ROOT:-0} != 1 && $(id -u) -eq 0 ]]; then
+  die "refusing to run as root — the workspace share uses 9p passthrough (security_model=none), so a guest agent could create root-owned/setuid files on the host. Run ccvm as a normal user (or set CCVM_ALLOW_ROOT=1 to override)."
+fi
+
 # ---- acceleration mode -----------------------------------------------------
 # Declarative default baked from `programs.ccvm.acceleration`; CCVM_ACCEL overrides for one run.
 # Three deliberately distinct modes (kept consistent in their checks + messaging):
@@ -690,6 +700,14 @@ if [[ -n ${EGRESSALLOW// /} ]]; then
   printf '%s' "${ports_csv%,}" >"$SEED/egress-ports"
 fi
 
+# QEMU seccomp sandbox (consumed in QEMU_ARGS below). On by default; CCVM_QEMU_SANDBOX=0 is an
+# escape hatch for a host whose qemu was built without seccomp support (rare on nixpkgs).
+SANDBOX_ARGS=()
+if [[ ${CCVM_QEMU_SANDBOX:-1} != 0 ]]; then
+  # Quote the option value: the commas are QEMU's sub-option syntax, not array separators (SC2054).
+  SANDBOX_ARGS+=(-sandbox "on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny")
+fi
+
 QEMU_ARGS=(
   -machine "$MACHINE_ARG"
   -cpu "$CPU"
@@ -709,6 +727,13 @@ QEMU_ARGS=(
   "${PROJECTS_ARGS[@]}"
   "${SCRATCH_ARGS[@]}"
   -device "virtio-rng-$BUS"
+  # Confine QEMU itself with the seccomp sandbox. QEMU is the trust boundary, so a device-emulation /
+  # 9p / slirp escape should hit a seccomp wall instead of running with the launching user's full
+  # privileges and environment. obsolete=deny + elevateprivileges=deny + spawn=deny + resourcecontrol=
+  # deny is the standard hardened set; slirp is built in and we invoke no external network/disk
+  # helpers, so nothing here legitimately needs to fork/exec. (nixpkgs' qemu is built with seccomp
+  # support; set CCVM_QEMU_SANDBOX=0 to disable if a future host lacks it.)
+  "${SANDBOX_ARGS[@]}"
   -display none
   -monitor none
   -serial "file:$TMP/console.log"
