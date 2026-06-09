@@ -179,21 +179,29 @@ reopening one needs a *new* reason, not a rediscovery of the old trade-off.
   The nftables ruleset is installed by a root systemd unit, but a root agent in the same guest could
   `nft flush` it (verified trivially). That is why setting `egressAllowlist` auto-drops the agent's
   sudo (`agentSudo`), raising the bar from one command to a guest-kernel exploit. The *complete* fix
-  is **host-side egress enforcement**, and it's been **prototyped and proven feasible fully
-  unprivileged** (a process in the namespace reached an allowlisted host while every other
-  destination was dropped). The validated design: run QEMU in an `unshare --user --net
-  --map-current-user` namespace, give that namespace a *filtered* uplink via an **external**
-  `pasta`/`slirp4netns` (attached with `--userns`/`--netns`), and put the allowlist nft **inside the
-  namespace**. The guest — even guest-root, even a guest-kernel LPE — cannot reach those rules; only
-  a full QEMU escape can. **Two traps make this expensive to rediscover:** (1) preserving the uid via
-  `--map-current-user` is *mandatory* — pasta's own default (and a plain userns) remaps the user to
-  root, which breaks 9p `security_model=none` workspace ownership; and `--runas` can't substitute,
-  because the same process must also hold `CAP_NET_ADMIN` to install the nft. (2) it's a two-process
-  orchestration (an `exec unshare` inner that keeps the PID + TTY foreground for `ssh -tt`, plus an
-  external pasta attached by `/proc/$PID/ns/*`, with a ready/uplink handshake and dual cleanup) that
-  reworks the delicate boot/connect/teardown path — so it lands as its own focused, boot-tested
-  change, with a human `--shell` pass for the TTY (which `boot.sh` can't cover). `agentSudo` is the
-  in-guest interim until then (it already raises exfil from one command to a guest-kernel exploit).
+  is **host-side egress enforcement**: put the allowlist nft in a namespace the guest can't reach,
+  with a filtered uplink via an **external** `pasta`/`slirp4netns` (attached by `/proc/$PID/ns/*`).
+  The uplink + filtering half is prototyped and works (allowlisted host reachable, all else dropped).
+  But integrating it hit a hard **uid/caps/9p trilemma** that makes this a real design decision, not
+  a quick build — three constraints can't all hold at once in a plain *unprivileged* userns:
+    * **nft needs `CAP_NET_ADMIN`** inside the namespace (pasta/slirp4netns have no IP allowlist);
+    * **9p `security_model=none` ownership** needs QEMU's effective host uid to be the real user and
+      the guest agent's uid to match QEMU's namespace view, or rw-mode writes are unreadable to it;
+    * **caps don't survive `execve` for a non-root uid.** So `unshare --map-current-user` (uid
+      preserved → 9p OK) *loses* `CAP_NET_ADMIN` the instant it execs — **verified: `nft` fails with
+      "Operation not permitted"** — while `--map-root` *keeps* caps (nft works) but maps the user to
+      uid 0, so QEMU's 9p view reports the workspace as uid 0 and the agent must then *also* run as
+      guest-uid-0 for rw to work. `--runas` can't bridge it (the process needs caps **and** the right
+      uid at once).
+  Two ways out, both real work: **(a)** require host `/etc/subuid` + `newuidmap` (setuid helper) to
+  map a uid *range* — uid 0 (caps) and the real uid (9p) in one userns; clean, but host setup; or
+  **(b)** `--map-root` + run the in-guest agent as uid 0 in this mode (safe: host-side egress holds
+  regardless of guest root) + teach the seed/launcher to remap accordingly — no host setup, but a
+  guest-side semantic change to validate by nested boot. Plus the orchestration itself (external
+  pasta, ready/uplink handshake, TTY-foreground `ssh -tt`, dual cleanup) is a delicate boot-path
+  rework needing a human `--shell` pass. **`agentSudo` is the shipped interim** — it already raises
+  exfil from one `sudo` to a guest-kernel exploit; host-side enforcement would raise it to a full
+  QEMU escape. Don't re-attempt this without resolving (a)-vs-(b) first.
 - **Encrypted disk, not a plain ephemeral one.** Wipe-on-exit must survive a crash that skips
   the cleanup trap, and on modern storage plain deletion ≠ erasure (async SSD TRIM, CoW
   snapshots retain freed blocks). With FDE the key dies with guest RAM at power-off, so the image
