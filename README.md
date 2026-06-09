@@ -8,7 +8,7 @@
 
 ---
 
-**[About](#about) · [Requirements](#requirements) · [Usage](#usage) · [Options](#options) · [Installation](#installation) · [Roadmap](#roadmap) · [License](#license)**
+**[About](#about) · [Requirements](#requirements) · [Usage](#usage) · [Security](#security) · [Options](#options) · [Installation](#installation) · [Roadmap](#roadmap) · [License](#license)**
 
 ---
 
@@ -29,9 +29,51 @@
 
 ## Usage
 
+  Installed it already? Run it in any project directory, exactly like `claude`:
+
   ```bash
   ccvm
   ```
+
+  Just want to try it, without installing anything? With Nix (flakes enabled):
+
+  ```bash
+  nix run github:jx-wi/ccvm
+  ```
+
+  > [!NOTE]
+  > The first run builds the VM image, so it takes a few minutes; after that it's cached and
+  > starts quickly.
+
+---
+
+## Security
+
+  By default, ccvm gives you **containment**: Claude runs inside a throwaway VM that can only
+  see the one directory you launched it in — not the rest of your machine, your SSH keys, or
+  your cloud credentials — and everything it does disappears when you close it.
+
+  Two things worth knowing about the defaults (which are tuned to feel exactly like native
+  `claude`):
+
+  - The VM can reach the internet freely, and it reuses your existing Claude login. So a
+    misbehaving or prompt-injected agent could, in principle, send your project files or login
+    token somewhere it shouldn't.
+  - Locking that down is one setting — restrict where the VM is allowed to connect:
+
+    ```nix
+    programs.ccvm.egressAllowlist = [ "github.com" "registry.npmjs.org" ];
+    # api.anthropic.com is always allowed, so Claude keeps working.
+    ```
+
+  For the strictest setup, also stop sharing your Claude config and authenticate with an API
+  key instead, so your login token never enters the VM at all:
+
+  ```nix
+  programs.ccvm.shareClaudeConfig = false;  # use the ANTHROPIC_API_KEY env var instead
+  ```
+
+  The full threat model and design rationale live in [CLAUDE.md](CLAUDE.md).
 
 ---
 

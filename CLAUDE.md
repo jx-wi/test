@@ -30,6 +30,20 @@ kernel*, and being a general-purpose VM manager — ccvm builds exactly one gues
 way. The VM being the boundary is what makes `--dangerously-skip-permissions` safe to opt into
 (`writableCwd=false` adds a file-level safety net on top).
 
+**Default posture — what the defaults do and don't stop (be honest about this).** The
+invariants below stop the *host* from being **persisted to or having its credentials written to
+disk** — they do **not** sandbox what a prompt-injected agent can **read and send**. With the
+native-mirroring defaults (open egress + `shareClaudeConfig=true`), the in-VM agent can read the
+OAuth credential (`~/.claude/.credentials.json` rides the ro 9p mount so claude can auth) and the
+whole project tree, and **exfiltrate either over open egress**. "Never copied to seed/disk"
+protects the host from *persistence*, not the agent from *reading shared inputs*. So the
+out-of-the-box win is **containment** (no host access beyond the CWD, nothing persists), **not
+exfiltration resistance** — a deliberate DevEx choice, not a bug. The primary hardening knob is
+`egressAllowlist` (default-deny egress; the API stays reachable); the strongest stance is
+`shareClaudeConfig=false` + API-key auth, so the OAuth token never enters the VM at all. Keep
+this distinction accurate in user-facing docs — under-stating it is the one thing that turns a
+sandbox into a liability.
+
 - **API key never touches disk/argv/kernel-cmdline.** It travels only over the SSH channel
   via `SendEnv`→`AcceptEnv`. Use `SendEnv`, **never** `SetEnv` (SetEnv puts it on the
   remote command line).
