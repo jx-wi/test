@@ -196,7 +196,7 @@
   Now update the lock file:
 
   ```bash
-  cd ~/Projects/yourConfigRepo && nix flake update
+  cd ~/Projects/yourConfigRepo && nix flake update ccvm --flake path:.
   ```
 
   3. home-manager configuration
@@ -223,10 +223,19 @@
     };
     programs.ccvm = {
       enable = true;
-      writableCwd = true;
-      cores = 4;
+      acceleration = "kvm";
+      cores = 8;
       memory = 8192;
+      vmDiskSize = 32;
       nix.enable = true;
+      egressAllowlist = [
+        "github.com"
+        "api.github.com"
+        "raw.githubusercontent.com"
+        "codeload.github.com"
+        "npmjs.com"
+        "registry.npmjs.org"
+      ];
       extraPackages = with pkgs; [
         bottom
         delta
@@ -243,7 +252,7 @@
   Now switch to your new configuration:
 
   ```bash
-  nix run nixpkgs#nh -- home switch ~/Projects/yourConfigRepo
+  cd ~/Projects/yourConfigRepo && nix run nixpkgs#nh -- home switch path:.
   ```
 
 ---
