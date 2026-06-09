@@ -2,9 +2,9 @@
 
 Working agreement for agents and contributors on **ccvm** — run Claude Code in an
 ephemeral, RAM-only QEMU microVM with native-terminal fidelity. User docs live in
-[README.md](README.md); the full rationale is in [docs/design.md](docs/design.md). This
-file is the operational distillation: the rules that must not regress and the traps that
-cost time to rediscover.
+[README.md](README.md). This file is the authoritative engineering doc: the rules that
+must not regress, the rationale behind the settled decisions, and the traps that cost
+time to rediscover.
 
 ## Repo map
 
@@ -22,6 +22,13 @@ cost time to rediscover.
 ## Security invariants — MUST NOT regress
 
 These are the whole point of the project. Treat any change that weakens one as a bug.
+
+**Scope of the boundary.** The trust boundary is QEMU: we assume its device/Virtio isolation
+holds, and defend the *host filesystem and the user's credentials* against a (possibly
+prompt-injected) agent. Explicitly out of scope: defending the host against a malicious *guest
+kernel*, and being a general-purpose VM manager — ccvm builds exactly one guest and boots it one
+way. The VM being the boundary is what makes `--dangerously-skip-permissions` safe to opt into
+(`writableCwd=false` adds a file-level safety net on top).
 
 - **API key never touches disk/argv/kernel-cmdline.** It travels only over the SSH channel
   via `SendEnv`→`AcceptEnv`. Use `SendEnv`, **never** `SetEnv` (SetEnv puts it on the
@@ -43,7 +50,7 @@ These are the whole point of the project. Treat any change that weakens one as a
   tag signing, and staging `core.excludesfile` by *content*. Keep all four guards. Verify by
   grepping the seed for any `/nix/store` path or `credential` key — expect zero hits.
 - **No persistent disk.** Root is tmpfs; the store is a read-only image. Nothing the agent
-  does survives exit except host-project edits while `autoUpdateFiles=true` — and, when the
+  does survives exit except host-project edits while `writableCwd=true` — and, when the
   opt-in `persistClaudeProjects` is on, writes under `~/.claude/projects` (session transcripts
   + memory). Both are deliberate, narrowly-scoped write-throughs, not a general persistent disk.
   The opt-in `vmDiskSize` disk pool is **not** an exception: it is an *ephemeral* disk, wiped on
@@ -58,13 +65,13 @@ These are the whole point of the project. Treat any change that weakens one as a
   `CCVM_SCRATCH_ALLOW_TMPFS=1`. The pool backs only **bulk, non-secret** data — `/scratch` and (with
   `nix.enable`) the writable `/nix/store` overlay upper, opened+mounted in the **initrd** by a fail-open
   LUKS oneshot (key still guest-only). Keep `/home`/secrets in tmpfs. Never stage the key through the seed.
-- **`autoUpdateFiles=false` means genuinely read-only.** The host tree is the 9p **lower**;
+- **`writableCwd=false` means genuinely read-only.** The host tree is the 9p **lower**;
   edits land in a tmpfs **upper** and must not reach the host.
 - **Only the CWD is shared.** No `~/.ssh`, `~/.aws`, or home dir crosses the boundary.
 
 ## Deliberate defaults — do not reverse
 
-- **Native mirroring is the default.** `autoUpdateFiles=true` (live host edits),
+- **Native mirroring is the default.** `writableCwd=true` (live host edits),
   `shareClaudeConfig=true` (reuse host `~/.claude`), and `shareGitConfig=true` (commit as you,
   with your aliases/ignores) make ccvm behave like native `claude`. Isolation (read-only
   project, no config) is the **opt-in**. Do not re-propose "secure by default" — that was the
@@ -93,7 +100,7 @@ These are the whole point of the project. Treat any change that weakens one as a
   variant was implemented, KVM-verified, then cut: 9p copy ran **slower than downloading** (<1 MiB/s
   vs. network), it punched a hole in the isolation thesis (exposed the *entire* host store ro to the
   agent), and the audience that benefits from caching already runs a real binary cache — which the
-  `substituters` option serves cleanly. See design §3.11 L2 / TODO #15.
+  `substituters` option serves cleanly.
 - **`extraClaudeMd` is default-on context, not a flag.** A built-in blurb is staged as the
   guest's `~/.claude/CLAUDE.md` (via the seed, **appended** to any host-shared one — never
   clobbering it) so the agent knows it's in ccvm. It must stay seed-delivered, never become
@@ -102,10 +109,52 @@ These are the whole point of the project. Treat any change that weakens one as a
 - **Transparent passthrough.** The wrapper injects **no** flags. Everything after `ccvm`
   is forwarded to `claude` verbatim, including `--dangerously-skip-permissions` (opt-in by
   the user, never auto-added). The *only* args the wrapper consumes (and does **not**
-  forward) are its own: `--shell`, `--ccvm-debug`, `--auto-update-files`,
-  `--no-auto-update-files`, `--ccvm-help`, `--ccvm-version`. They are deliberately
-  `--ccvm-`/`--*-files`-namespaced so bare `--help`/`--version` still reach claude.
+  forward) are its own: `--shell`, `--ccvm-debug`, `--writable-cwd`,
+  `--read-only-cwd`, `--ccvm-help`, `--ccvm-version`. They are deliberately ccvm-specific
+  names (none is a claude flag), so bare `--help`/`--version` still reach claude.
   Preserve that interception boundary.
+
+## Why it's built this way (settled decisions — don't relitigate)
+
+The rationale that used to live in `docs/design.md`. These were considered and decided;
+reopening one needs a *new* reason, not a rediscovery of the old trade-off.
+
+- **SSH transport, not the serial console — for PTY fidelity.** The load-bearing choice. A
+  serial line is not a terminal: no `SIGWINCH`, no window size, no full termios, so resize
+  breaks and `vim`/`less`/full-screen TUIs corrupt. `ssh -tt` to a real sshd gives a genuine
+  guest PTY that propagates `TERM`, the initial window size, `SIGWINCH` on every resize, and
+  termios end-to-end — so the VM is invisible. `-tt` *forces* PTY allocation even when the
+  wrapper's own stdin isn't a tty. The wrapper runs ssh in the foreground but **never `exec`s
+  it**, so it regains control to tear the VM down.
+- **QEMU + slirp, not firecracker / cloud-hypervisor.** We need outbound HTTPS to the API with
+  **zero host setup** — no bridges, TAP devices, or `sudo`. QEMU's built-in slirp gives
+  unprivileged user-mode NAT (guest 10.0.2.x, synthesised DNS+DHCP) plus `hostfwd` for the
+  inbound SSH port. The lighter VMMs boot faster but make you wire up host networking, which
+  breaks "works on a stock box as a normal user." Boot speed matters; running unprivileged
+  matters more.
+- **Egress: an allowlist, not Tor.** Tor solves *anonymity*, which is orthogonal — the dominant
+  flow is the Anthropic API authenticated with the user's own credential, so Tor hides the
+  source IP while the app layer still identifies you exactly (self-defeating), adds latency, and
+  hits Tor-exit blocking. It's also redundant: the guest egresses through the *host* stack, so a
+  user who wants anonymity runs Tor/VPN on the host and the guest rides it for free. Egress
+  *control* (where the agent may connect) belongs in ccvm; *anonymization* belongs on the host.
+  The IP-filter MVP leaves three residual channels — each the job of a future SNI/DNS-filtering
+  proxy, not the packet filter: **FQDN staleness** (the kernel sees IPs, so FQDNs are
+  host-pre-resolved at launch into pinned A/AAAA records — a CDN like `api.anthropic.com`
+  rotating mid-session breaks calls, so restart or pin a CIDR); **DNS tunneling** (DNS is pinned
+  to the slirp stub resolver, blocking DNS-to-anywhere, but low-bandwidth tunneling through the
+  recursive resolver remains); **TCP-only** (QUIC/UDP 443 is dropped; clients fall back to TCP).
+- **Encrypted disk, not a plain ephemeral one.** Wipe-on-exit must survive a crash that skips
+  the cleanup trap, and on modern storage plain deletion ≠ erasure (async SSD TRIM, CoW
+  snapshots retain freed blocks). With FDE the key dies with guest RAM at power-off, so the image
+  is inert ciphertext the instant QEMU stops — trap or no trap. The trap `rm` is
+  belt-and-suspenders; the guarantee rests on the key being gone.
+- **One encrypted pool, not a second `/nix/store` disk.** Once the disk is encrypted with a
+  guest-RAM key, disk-vs-tmpfs makes no confidentiality difference to an in-guest attacker (it
+  can read tmpfs or decrypt the disk equally). The right split is *bulk on the encrypted disk,
+  secrets in tmpfs* — by **placement**, not a second sized disk. A second disk only earns its
+  keep for a different *lifecycle* (a persistent, content-addressed store cache) — a separate
+  future feature with its own key story, deliberately **not** folded into `vmDiskSize`.
 
 ## Build / test / debug
 
@@ -125,7 +174,7 @@ These are the whole point of the project. Treat any change that weakens one as a
   ```
 
   Boot it under `tcg`/`q35`, grep the output. This is exactly how `shareClaudeConfig` and
-  `autoUpdateFiles` were verified end-to-end — much faster than booting the real agent.
+  `writableCwd` were verified end-to-end — much faster than booting the real agent.
 - `nix flake check` should pass. It builds the guest image, shellchecks the wrapper, and
   runs `tests/host.sh` (the `checks.<sys>.host` derivation) — host-side secret hygiene,
   config staging, verbatim argv, mode selection — against the real wrapper driven by its
@@ -143,23 +192,28 @@ These are the whole point of the project. Treat any change that weakens one as a
 - **Definition of done for a behaviour change:** `nix flake check` green **and** a
   stub-package boot test asserting the new behaviour under `tcg`/`q35` — plus a human
   `--shell` pass if it touches the TTY.
+- **aarch64-linux is best-effort.** It evaluates and is wired up (`qemu-system-aarch64`, the
+  `virt` machine, PL011 `ttyAMA0` console), but x86_64-linux is the primary, CI-built target.
 
 ## Conventions
 
-- **Working `TODO.md`: commit automatically once all checks pass.** When working through a
-  `TODO.md` item, run the relevant checks (`bash -n`, the `host.sh` dry-run recipe, and — on a
+- **Commit automatically once all checks pass when working through a task list.** When working a
+  multi-step task, run the relevant checks (`bash -n`, the `host.sh` dry-run recipe, and — on a
   Nix+KVM box — `nix flake check` / `bash tests/boot.sh` / a `--shell` pass for TTY changes); if
   they're green, commit without stopping to ask per item. Still surface anything that can only be
   verified on the Nix+KVM box so it gets checked there before being claimed done.
+- **Don't touch `README.md` without an explicit go-ahead.** The user owns the README. Propose
+  changes (even a one-word fix to a dangling reference) and wait for an explicit OK before
+  editing it — unlike the rest of the tree, it is not auto-fixable under the commit-on-green rule.
 - **Commit trailer (exact):** `Co-authored-by: Claude <noreply@anthropic.com>` — lowercase
   `authored-by`, bare `Claude`, no model name. This intentionally differs from the Claude
   Code CLI default; use *this* form.
 - **Config flows through `@TOKENS@`.** Scalars are baked at build time in `mkccvm.nix`
   (`@MODE@` = `rw`/`overlay`, `@SHARECLAUDE@` = `1`/`0`, etc.). Values only known at launch
   — the workspace 9p share and SSH port — are **not** baked; the wrapper builds those QEMU
-  args at runtime (the microvm.nix "runtime-share trap", design §3.8).
+  args at runtime (the microvm.nix "runtime-share trap").
 - **Runtime override pattern:** a `CCVM_*` env var overrides the baked default for one run
-  (`CCVM_AUTOUPDATE`, `CCVM_SHARE_CLAUDE_CONFIG`, `CCVM_MLOCK`, `CCVM_ACCEL`); an explicit `ccvm` flag
+  (`CCVM_WRITABLE_CWD`, `CCVM_SHARE_CLAUDE_CONFIG`, `CCVM_MLOCK`, `CCVM_ACCEL`); an explicit `ccvm` flag
   wins over the env var.
 - **`acceleration` is a declarative mode, baked as `@ACCELERATION@` (`auto`/`kvm`/`tcg`).** `auto`
   (default) uses KVM when `/dev/kvm` is usable else falls back to TCG, **never** erroring on accel —

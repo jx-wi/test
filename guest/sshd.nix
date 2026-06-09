@@ -1,7 +1,8 @@
 # Hardened, single-purpose sshd. This is the (invisible) transport the host wrapper
 # uses to drop the user straight into Claude Code with a real PTY — chosen over a
 # serial/virtio console specifically because SSH propagates termios and SIGWINCH, so
-# resize / vim / less / full-screen TUIs behave exactly as on the host (design.md §3.3).
+# resize / vim / less / full-screen TUIs behave exactly as on the host (see CLAUDE.md,
+# "SSH transport, not the serial console").
 #
 # Key-only, no passwords, no root, one ForceCommand. The host key and authorized_keys
 # come from the per-run seed (installed by ccvm-seed.service), so the client can pin the

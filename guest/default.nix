@@ -2,12 +2,12 @@
 #
 # Root is a tmpfs (writable, RAM-backed, discarded on power-off); /nix/store is a
 # read-only squashfs image attached as a virtio-blk device. Nothing the guest does
-# survives a shutdown — there is no persistent disk anywhere (see docs/design.md).
+# survives a shutdown — there is no persistent disk anywhere (see CLAUDE.md).
 #
 # This module is evaluated by lib/mkccvm.nix, which extracts the kernel, initrd,
 # store image and toplevel and boots them with a runtime-constructed QEMU command
 # line (the workspace share and SSH port are only known at `ccvm` launch time, so
-# they cannot be declared here — see the microvm.nix runtime-share trap, design.md).
+# they cannot be declared here — see the microvm.nix runtime-share trap, CLAUDE.md).
 { config, lib, pkgs, ... }:
 let
   cfg = config.ccvm;
@@ -21,7 +21,7 @@ let
   # present we LUKS-format/open/mkfs it and mount it OVER that tmpfs, so the overlay's upperdir lands
   # on disk. Absent disk or ANY failure leaves the tmpfs upper (RAM) untouched — boot never bricks.
   # The LUKS key is generated in initrd /run (tmpfs RAM), never on 9p (host sees only ciphertext,
-  # §3.7), and shredded right after open. A marker in /run — which systemd preserves across
+  # host sees only ciphertext), and shredded right after open. A marker in /run — which systemd preserves across
   # switch-root — tells the post-boot seed service the disk is already open, so it shares the SAME
   # pool for /scratch (binds a subdir) rather than reformatting. pbkdf2 keeps luksFormat fast (the
   # key is already 64 random bytes; a memory-hard KDF would only slow the initrd for no gain).
