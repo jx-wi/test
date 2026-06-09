@@ -1,426 +1,219 @@
 # ccvm
 
-**Run Claude Code in a throw-away microVM, with zero setup.**
+**CLI for isolating and securing the Claude Code experience with little-to-no added friction**
 
-`ccvm` boots an ephemeral QEMU virtual machine and drops you straight into the normal
-Claude Code TUI — same terminal, same keys, same everything — except the agent is now
-operating inside a disposable, RAM-only NixOS that **can't touch your real machine** beyond
-the one project you're working in. When you quit, the VM's memory is freed; there is no
-disk to clean up.
+***100% reproducible from this repository.***
 
-It's the spiritual sibling of a disposable sandbox: `cd` into a project, type `ccvm`
-instead of `claude`, and work exactly as you would natively — but with a hard isolation
-boundary around the agent.
-
-```
-cd ~/code/my-project
-ccvm                      # ← instead of `claude`
-```
+(CI widget here) [![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
 ---
 
-## Why
-
-`claude --dangerously-skip-permissions` is wonderfully fast and wonderfully dangerous: it
-lets the agent run anything against your actual filesystem. ccvm makes that safe by moving
-the agent into a VM:
-
-- **Native by default, lockable on demand.** Out of the box the agent edits your project
-  live, exactly like native `claude`. Want a hard safety net? Set `autoUpdateFiles = false`
-  (or run `ccvm --no-auto-update-files`): the project goes read-only, every edit lands in
-  the VM's RAM and evaporates on exit, and you export what you want with `git push`.
-- **The rest of your machine is invisible.** Only the current directory is shared. No
-  `~/.ssh`, no `~/.aws`, no home directory.
-- **Your API key never hits disk.** It travels only inside the encrypted SSH channel —
-  never on the kernel cmdline, in a QEMU argument, or in any file.
-- **The VM leaves no trace.** Crash, kill, `Ctrl-C`, dropped connection — the machine and
-  all of its RAM are gone. The only thing that can outlive a session is edits to your
-  project directory, and only while you allow it (turn it off to keep even those ephemeral).
-
-Because the VM is the safety boundary, `--dangerously-skip-permissions` is safe to use
-here — but ccvm doesn't force it on you. It launches Claude with **no extra flags**; opt
-in yourself with `ccvm --dangerously-skip-permissions` (everything after `ccvm` is
-forwarded verbatim) when you want the agent to run unattended.
+**[About](#About) · [Requirements](#Requirements) · [Usage](#Usage) · [Options](#Options) · [Installation](#Installation) · [Roadmap](#Roadmap) · [License](#License)**
 
 ---
 
-## Quick start
+## About
 
-Requires a Linux box with **Nix** and **flakes** enabled (KVM strongly recommended for
-speed; it falls back to slow software emulation otherwise).
+  `ccvm` aims to be a drop-in replacement for running `claude`
 
-```sh
-export ANTHROPIC_API_KEY=sk-ant-...     # optional — ccvm reads it from the environment
-
-# run it straight from GitHub, no install:
-cd ~/code/my-project
-nix run github:jx-wi/ccvm
-
-# …or with arguments — everything after `ccvm` is forwarded to claude verbatim:
-nix run github:jx-wi/ccvm -- --model sonnet "summarise the build setup"
-```
-
-**No API key?** That's fine — run `ccvm` without one and use Claude's in-VM `/login`
-(web auth): copy the printed URL into your browser, sign in, and paste the code back.
-Auto browser-open won't work from inside the VM, but the copy/paste flow does. Whatever
-you log in with lives only in the VM and is gone on exit.
-
-### Install via home-manager
-
-```nix
-{
-  inputs.ccvm.url = "github:jx-wi/ccvm";
-
-  # in your home-manager configuration:
-  imports = [ inputs.ccvm.homeManagerModules.default ];
-
-  programs.ccvm = {
-    enable = true;
-    # autoUpdateFiles = false;           # opt into the read-only safety net (default: true)
-    # shareClaudeConfig = false;           # stop reusing your host ~/.claude (default: true)
-    # extraPackages = with pkgs; [ go gopls python3 ];  # project toolchains
-  };
-}
-```
-
-That puts a persistent `ccvm` command on your `PATH`.
+  Running `ccvm` will automatically whip up a RAM-only NixOS microVM and drop you into the same TUI that running `claude` would.
 
 ---
 
-## The one switch that matters: `autoUpdateFiles`
+## Requirements
 
-| `autoUpdateFiles` | Host project | Edits | Use when |
-|---|---|---|---|
-| `true` *(default)* | **read-write** | land on the host **live** | you want native behaviour (mirrors `claude`) |
-| `false` | **read-only** | land in VM RAM, vanish on exit | you want a hard safety net; export via `git push` |
-
-Per-invocation override without changing config — highest precedence first:
-`ccvm --no-auto-update-files` / `ccvm --auto-update-files`, then `CCVM_AUTOUPDATE=0|1 ccvm`.
-Those `ccvm` flags are intercepted by the wrapper and are **not** forwarded to claude.
+  - Linux
+  - Nix
 
 ---
 
-## Options (`programs.ccvm.*`)
+## Usage
 
-| Option | Default | Meaning |
-|---|---|---|
-| `enable` | `false` | Install the `ccvm` command. |
-| `package` | `pkgs.claude-code` | The claude-code package to run in the VM. |
-| `autoUpdateFiles` | `true` | Read-write host project (live, like native `claude`) vs. ephemeral overlay (above). |
-| `memory` | `4096` | VM RAM, MiB. Per-run override: `CCVM_MEMORY=<MiB>` (e.g. for heavy `nix develop` closures). |
-| `cores` | `4` | VM vCPUs. |
-| `extraPackages` | `[ ]` | Extra tools inside the VM (a sensible base set is always present). |
-| `nix.enable` | `false` | Enable in-VM `nix` (`nix develop`/`nix build`). On → guest gets `nix.enable` + a **writable `/nix/store` overlay** (ro store lower + tmpfs upper), so nix realises paths into RAM; set `vmDiskSize` to back the upper with disk for big closures. Build-time (rebuilds the guest), not an env var — a writable store must be set up in the initrd. See [In-VM nix](#in-vm-nix-nixenable). |
-| `nix.useHostStoreAsCache` | `false` | Attaches the host `/nix/store` **and** its nix path-validity DB to the VM as **read-only** 9p mounts and registers them as a `local?root=…` build substituter, so in-VM `nix build`/`nix develop` reuse paths the host already realised instead of rebuilding them. The DB's `db.sqlite` is copied into a writable tmpfs dir in the VM (nix opens a store DB read-write even to query it). The host `/nix/store` itself is never written from the VM. Requires `nix.enable`. Per-run: `CCVM_NIX_HOST_CACHE=0\|1`. Exposes the host store ro — low-risk (content-addressed public packages), opt-in. |
-| `apiKeyVariable` | `"ANTHROPIC_API_KEY"` | Host env var carrying the key; passed only via SSH `SendEnv`. |
-| `shareClaudeConfig` | `true` | Mount the host `~/.claude` (ro) so the VM reuses your login, settings, commands and memory (home-manager symlinks are dereferenced); writes stay ephemeral. Per-run: `CCVM_SHARE_CLAUDE_CONFIG=0\|1`. |
-| `persistClaudeProjects` | `false` | **Opt-in.** Mount the host `~/.claude/projects` into the VM **read-write** so Claude's session transcripts and per-project memory persist back to the host — `claude --resume` then works across runs and memory survives. Off by default (those writes are otherwise ephemeral, like the rest of `~/.claude`). Scoped to `projects/` only, so the OAuth credential is still never written back. See [Resuming sessions & persisting memory](#resuming-sessions--persisting-memory). Per-run: `CCVM_PERSIST_PROJECTS=0\|1`. |
-| `shareGitConfig` | `true` | Stage a **sanitized** copy of your global git config into the VM (`~/.config/git/config`) so in-VM `git` commits as you, with your aliases and global ignores. Host-only `/nix/store` tool paths (editor/pager/delta/gh helper), all `credential.*`, and commit signing are stripped — nothing secret crosses, nothing dangles. See [Git config in the VM](#git-config-in-the-vm). Per-run: `CCVM_SHARE_GIT_CONFIG=0\|1`. |
-| `extraClaudeMd` | *(built-in blurb)* | Markdown staged as the guest's `~/.claude/CLAUDE.md` so the agent knows it's inside ccvm (ephemeral, sandboxed, only the project dir shared) and adapts. Appended to any host-shared `CLAUDE.md`; the wrapper prepends a runtime note about the file-sharing mode. Set `""` to disable, or replace with your own. See [Telling the agent it's in ccvm](#telling-the-agent-its-in-ccvm). Per-run: `CCVM_CLAUDE_MD=<file>`. |
-| `lockGuestMemory` | `false` | mlock the guest RAM (QEMU `mem-lock=on`) so it can't be paged to the host's (possibly unencrypted) swap — keeps in-VM secrets off persistent storage. Needs sufficient `RLIMIT_MEMLOCK`. Per-run: `CCVM_MLOCK=0\|1`. |
-| `vmDiskSize` | `0` | **Opt-in, GiB.** `0` keeps the pure-RAM model. A positive size (e.g. `32`) attaches a sparse, **encrypted** ephemeral disk — the VM's writable pool — mounted at `/scratch` for large writable data that would otherwise exhaust the RAM-backed tmpfs (build outputs, `node_modules`/`target`/`.venv`, caches). The guest generates the LUKS key in its own RAM — the host only ever sees ciphertext — and the disk is wiped on exit (key dies with guest RAM + the image is removed). `/home` and root stay tmpfs, so secrets never leave RAM. Host image lives in `${XDG_CACHE_HOME:-~/.cache}/ccvm` (override `CCVM_SCRATCH_DIR`); a tmpfs target is refused unless `CCVM_SCRATCH_ALLOW_TMPFS=1`. Per-run: `CCVM_VM_DISK_SIZE=<GiB>\|0`. See [Encrypted disk pool](#encrypted-disk-pool-vmdisksize). |
-| `egressAllowlist` | `[ ]` | **Opt-in.** Empty = open egress (native default). Non-empty switches the guest to a default-deny egress firewall allowing only these FQDN/IP/CIDR destinations (`api.anthropic.com` auto-included) — closes the *direct* exfiltration channel (DNS-to-stub-resolver stays open as a residual channel). See [Threat model & network egress](#threat-model--network-egress). |
-| `egressPorts` | `[ 443 ]` | Destination ports the allowlist permits (only when `egressAllowlist` is set). Add `80` for plain-HTTP mirrors. |
-| `extraGuestModules` | `[ ]` | Extra NixOS modules merged into the guest (escape hatch). |
-
-### Runtime environment knobs
-
-| Var | Effect |
-|---|---|
-| `ccvm --auto-update-files` / `--no-auto-update-files` | Force file-sharing mode for one run (wins over `CCVM_AUTOUPDATE`); intercepted, not forwarded to claude. |
-| `CCVM_AUTOUPDATE=1\|0` | Override the file-sharing mode for one run. |
-| `CCVM_SHARE_CLAUDE_CONFIG=1\|0` | Override host `~/.claude` sharing for one run (wins over the baked `shareClaudeConfig`). |
-| `CCVM_PERSIST_PROJECTS=1\|0` | Persist (or don't) `~/.claude/projects` back to the host for one run — enables cross-run `--resume` and memory (overrides the baked `persistClaudeProjects`). |
-| `CCVM_SHARE_GIT_CONFIG=1\|0` | Override git-config staging for one run (wins over the baked `shareGitConfig`). |
-| `CCVM_CLAUDE_MD=<file>` | Use an alternate ccvm-context file for one run (wins over the baked `extraClaudeMd`); set it **empty** to inject nothing. |
-| `CCVM_MLOCK=1\|0` | Lock (or unlock) the guest RAM for one run (overrides the baked `lockGuestMemory`). |
-| `CCVM_MEMORY=<MiB>` | Override the guest RAM (MiB) for one run, no rebuild — e.g. `CCVM_MEMORY=16384` for a big dependency closure. |
-| `CCVM_SHELL=1` / `ccvm --shell` | Drop into a debug **zsh** in the guest instead of claude. |
-| `CCVM_DEBUG=1` / `ccvm --ccvm-debug` | Stream the guest console while booting; keep the scratch dir on exit. |
-| `CCVM_ACCEL=tcg` | Force software emulation (for hosts where `/dev/kvm` exists but is broken). |
-| `CCVM_MACHINE=q35` | Use the q35 machine type instead of the default `microvm`. |
-| `ccvm --ccvm-help` | List ccvm's own flags + env knobs and exit (bare `--help` still forwards to claude). |
-| `ccvm --ccvm-version` | Print the ccvm version and exit (bare `--version` still forwards to claude). |
-| `CCVM_VM_DISK_SIZE=<GiB>\|0` | Attach (or disable) the encrypted disk pool (`/scratch`) for one run (overrides the baked `vmDiskSize`). |
-| `CCVM_NIX_HOST_CACHE=0\|1` | Attach (or disable) the read-only host `/nix/store` build cache for one run (overrides the baked `nix.useHostStoreAsCache`; needs `nix.enable`). |
-| `CCVM_SCRATCH_DIR=<dir>` | Where the host keeps the (sparse, encrypted) scratch image — must be disk-backed; default `${XDG_CACHE_HOME:-~/.cache}/ccvm`. |
-| `CCVM_SCRATCH_ALLOW_TMPFS=1` | Permit a tmpfs scratch dir (normally refused, since a RAM-backed "disk" defeats the point). For tests / unusual setups. |
-
-### Locking guest memory (`lockGuestMemory` / `CCVM_MLOCK`)
-
-Everything secret in the VM lives in guest RAM — the API key in the launcher's environment,
-any `/login` credentials in the guest tmpfs. That RAM is ordinary host process memory, so a
-memory-pressured host kernel *could* page it out to swap (and your swap may be
-unencrypted). Turning this on starts QEMU with `-overcommit mem-lock=on`, which `mlock`s the
-guest so it can never reach swap. This — not full-disk encryption, which is moot when there
-is no persistent disk — is the relevant at-rest protection for an all-RAM VM. It is **off by
-default** because it requires a raised memory-lock limit.
-
-**`mlock` needs `RLIMIT_MEMLOCK` ≥ the guest RAM (plus QEMU's overhead).** Many Linux setups
-ship a tiny default (often 8 MiB / `8192` KiB), far below the default `memory = 4096` MiB
-guest, so QEMU aborts at startup with `mlock: Cannot allocate memory`. Check yours with
-`ulimit -l` (`unlimited`, or KiB). Raise it before enabling:
-
-| Where | Fix |
-|---|---|
-| Current shell only | `ulimit -l unlimited`, then re-run `ccvm` |
-| systemd user services | set `LimitMEMLOCK=infinity` in the unit / drop-in |
-| System-wide (PAM) | add `<user> - memlock unlimited` to `/etc/security/limits.conf` (or a `limits.d` file), then re-login |
-| NixOS | `security.pam.loginLimits = [ { domain = "*"; type = "-"; item = "memlock"; value = "unlimited"; } ];` |
-
-If you can't or don't want to raise the limit, leave `lockGuestMemory` off (the default) or
-pass `CCVM_MLOCK=0` for a single run — guest RAM may then reach host swap, the only
-trade-off. The wrapper runs a preflight check and prints a loud warning (with these same
-fixes) when the limit looks too low.
-
-### Encrypted disk pool (`vmDiskSize`)
-
-ccvm is RAM-only by default: the root is tmpfs and `/nix/store` is a read-only image, so there
-is no persistent disk (that's what makes wipe-on-exit a property of physics, not a cleanup
-routine). The trade-off is that **large writable data** — a big `node_modules`/`target`/`.venv`,
-hefty build outputs — competes with the guest's RAM and can OOM the tmpfs at the default
-`memory = 4096`.
-
-`vmDiskSize = 32` (GiB; off by default) fixes that without giving up wipe-on-exit. The host
-attaches a **sparse** disk image (it only consumes what's actually written) and the **guest**
-encrypts it — it becomes the VM's writable **pool** for bulk, non-secret data:
-
-- The LUKS key is generated **inside the guest, in RAM**, and `cryptsetup luksFormat`s the device
-  fresh on every boot. The key never crosses the 9p boundary — **the host only ever sees
-  ciphertext**, the same principle as the API key never touching disk.
-- It's mounted at **`/scratch`**, owned by the agent. Point heavy writers at it (`TMPDIR=/scratch/tmp`,
-  `CARGO_TARGET_DIR=/scratch/cargo`, an `npm`/`pip` cache, …).
-- **`/home` and root stay tmpfs**, so secrets (`/login` credentials, API key material, agent
-  memory) never leave guest RAM — the split is *bulk on the encrypted disk, secrets in RAM*.
-- **Wipe-on-exit is cryptographic:** the key dies with guest RAM at power-off, so the image is
-  inert ciphertext the instant the VM stops — even on a crash that skips cleanup. The wrapper also
-  removes the image on exit as belt-and-suspenders.
-
-The image lives in a **disk-backed** dir (`${XDG_CACHE_HOME:-~/.cache}/ccvm`; override with
-`CCVM_SCRATCH_DIR`) — never tmpfs, which would put the "disk" back in RAM and defeat the purpose;
-ccvm refuses a tmpfs target unless you set `CCVM_SCRATCH_ALLOW_TMPFS=1`. Per run:
-`CCVM_VM_DISK_SIZE=<GiB>` (or `=0` to disable). The disk pool is for when the guest must **write**
-large data ephemerally; with `nix.enable` on, the pool also backs the writable `/nix/store` upper
-(see below).
-
-### In-VM nix (`nix.enable`)
-
-`nix develop` is the gateway to per-project, declarative, reproducible toolchains (npm, pip, cargo,
-…). By default ccvm's `/nix/store` is **read-only** (the lean, fast, RAM-only posture), so in-VM
-`nix build`/`nix develop` don't work — you get the baked toolchain plus whatever you add via
-`extraPackages`. Turn on `nix.enable` to make nix work inside the guest. Two postures:
-
-| Posture | Setting | `/nix/store` | Host surface |
-|---|---|---|---|
-| **Minimal** *(default)* | `nix.enable = false` | read-only image | none; smallest closure, fastest boot |
-| **In-VM nix** | `nix.enable = true` | **writable overlay** (ro image lower + writable upper) | none — the guest builds its own paths into a self-contained store |
-
-The guest always boots off a **self-contained** `/nix/store` image — by default nothing of the host
-store is exposed. To *accelerate* in-VM builds by reusing host-built paths, set
-`nix.useHostStoreAsCache = true` (or `CCVM_NIX_HOST_CACHE=1`): the host `/nix/store` **and** its nix
-path-validity DB (`/nix/var/nix/db`) are attached as **read-only** 9p mounts (never writable — the
-host store is never modified from the VM) at a side path `/nix/.host-store`, and registered as a
-`local?root=…` build **substituter**. So when in-VM nix needs a path the host already has, it copies
-it from the read-only mount instead of rebuilding/refetching. (The DB's `db.sqlite` is copied into a
-writable tmpfs dir in the VM, because nix opens a store's DB read-write — for the lock file and WAL —
-even just to query it, and a read-only mount can't be opened.) Exposing the host store read-only
-enlarges the host surface visible to the agent, but store paths are content-addressed public
-packages, so the exposure is low-risk; it's opt-in and off by default. The cache is best-effort: a
-path the host adds *during* a session, or only present in the DB's write-ahead log at launch, may
-simply miss and be rebuilt.
-
-With `nix.enable`, the overlay's writable upper is **tmpfs (RAM)** by default — a big `nix develop`
-will exhaust guest RAM, so set **`vmDiskSize`** to relocate the upper onto the encrypted ephemeral
-disk. Everything stays wipe-on-exit: paths nix realises live only in the upper (RAM or the encrypted
-disk) and are gone when the VM stops. `nix.enable` is a **build-time** option (it rebuilds the guest
-with `nix.enable` and reconfigures the store mount in the initrd), so enable it via home-manager
-(`programs.ccvm.nix.enable = true`) or a flake override — not a `CCVM_*` env var.
-
-### Git config in the VM (`shareGitConfig` / `CCVM_SHARE_GIT_CONFIG`)
-
-So in-VM `git` behaves like native — commits as *you*, with your aliases and global ignores —
-ccvm stages a **sanitized** copy of your global git config into the guest at
-`~/.config/git/config` (on by default). It can't carry the config verbatim: home-manager
-writes absolute `/nix/store/…` paths for your editor, pager, `delta`, and the `gh` credential
-helper, and those paths don't exist in the guest. So the wrapper resolves your config and:
-
-- **drops any setting whose value points into `/nix/store`** (the host-only tool paths — they'd
-  dangle or break `git`),
-- **drops every `credential.*` helper** — no host credentials cross the boundary (`~/.ssh` and
-  your `gh` token are never shared),
-- **stages the content of your global `core.excludesfile`** to the guest's default ignore path,
-- **force-disables commit/tag signing** — your signing key is deliberately never carried, so a
-  leftover `commit.gpgsign = true` would only break `git commit` inside the VM.
-
-The result: **`git commit` works as you out of the box.** Two honest consequences follow from
-*not* carrying credentials or keys: **`git push` won't authenticate inside the VM** (there's no
-key to do it with), and **commits aren't signed**. Pushing is deliberately a host-side action —
-ccvm never carries a token or SSH key into the VM just to enable it. In the default **rw** mode
-that's seamless: the agent's commits land in your *host* repository live, so you just `git push`
-from a normal terminal on the host. In **overlay** mode the commits are inside the disposable
-VM, so export them from the host first (or switch to rw). Settings that name a *bare* command (e.g.
-`core.editor = nvim`) are kept as-is; if that program isn't in the guest, `git` falls back to
-its built-ins (the guest ships `vim` and `less`). Turn the whole thing off with
-`shareGitConfig = false` or `CCVM_SHARE_GIT_CONFIG=0`. Only non-secret config is ever staged —
-never the API key, never a credential.
-
-### Telling the agent it's in ccvm (`extraClaudeMd` / `CCVM_CLAUDE_MD`)
-
-By default ccvm stages a short Markdown blurb as the guest's `~/.claude/CLAUDE.md` (global
-memory) so the agent **knows it's running inside ccvm** and behaves accordingly: nothing
-persists, only the project directory is shared, it can be more autonomous because the sandbox
-is disposable, and `git commit` works but `git push` to an SSH remote won't (no key). The
-wrapper also **prepends a line that reflects the current file-sharing mode** — in `rw` mode it
-says edits are live on the host; in overlay mode it warns edits are discarded on exit — which
-the build-time blurb can't know on its own.
-
-The default blurb also tells the agent to **prefer writing durable information into the codebase**
-(`CLAUDE.md`, `README`, `docs/`, code) and committing it, rather than relying on memory — memory
-is brittle for devex and, unless `CCVM_PERSIST_PROJECTS=1`, ephemeral in the VM. The runtime note
-states this session's actual persistence status, so the agent's guidance matches reality.
-
-It rides the **read-only seed** and is laid over the config overlay, never passed as a `claude`
-flag, so ccvm's transparent passthrough is untouched. When `shareClaudeConfig` brings your host
-`~/.claude/CLAUDE.md`, the ccvm blurb is **appended** to it (your global memory is preserved;
-the host file is never modified). Replace it with your own text via `extraClaudeMd = "…"`, or
-turn it off entirely with `extraClaudeMd = ""` (or `CCVM_CLAUDE_MD=` for one run).
-
-### Resuming sessions & persisting memory (`persistClaudeProjects` / `CCVM_PERSIST_PROJECTS`)
-
-By default everything Claude writes under `~/.claude` inside the VM is **ephemeral** — it rides a
-read-only mount of your host config with a throwaway overlay on top, so writes vanish on exit.
-That includes `~/.claude/projects/<project>/`, where Claude keeps each session's **transcript**
-(what `claude --resume` reads) and the project's **memory**. The consequence: a session you
-*start inside ccvm* can't be resumed in a later run — `claude --resume` reports the session ID is
-not found — and memories don't carry over. (Sessions you started with native `claude` on the host
-still show up, read-only, because the host history is mounted in.)
-
-Turn on `persistClaudeProjects` (or `CCVM_PERSIST_PROJECTS=1` for one run) to mount the host's
-`~/.claude/projects` **read-write**, so those transcripts and memories are written straight back
-to the host. Then `--resume` works across ccvm runs and memory persists, just like native. It's
-**off by default** because it relaxes the "nothing from the VM touches the host except your
-project edits" stance. The relaxation is deliberately narrow: only `~/.claude/projects/` is made
-writable — your OAuth credential lives at `~/.claude/.credentials.json` (the config root, *not*
-under `projects/`), so it is never in this share and never written back.
-
----
-
-## Threat model & network egress
-
-ccvm contains the agent's effect on your **filesystem** (only the CWD is shared; the rest of
-the host is invisible) and protects your **API key** (it never hits disk/argv; see above).
-What it does **not** restrict by default is the **network**: like native `claude`, the guest
-can reach anything outbound, so `npm`/`pip`/`git clone`/`WebFetch` all work. That's the
-deliberate native-mirroring default — and it leaves one real gap worth understanding:
-
-> **In the default posture, a prompt-injected or compromised agent could exfiltrate data.**
-> With `shareClaudeConfig = true` (default) your host `~/.claude` — *including the OAuth
-> credential* — is readable inside the VM, and with open egress the agent could POST the
-> project tree or that credential to an arbitrary host. The VM still can't touch your host
-> filesystem, but containment ≠ exfiltration-proof.
-
-This is inherent to mirroring native `claude` (reusing your host login *means* the credential
-is in the VM). Your options, cheapest first:
-
-- **Authenticate with an API key instead of OAuth** (`export ANTHROPIC_API_KEY=…`, and
-  `shareClaudeConfig = false`): then no long-lived OAuth credential is exposed to the agent at
-  all — the key rides the SSH channel and is the only secret in the VM.
-- **Lock down the network with `egressAllowlist`** (opt-in; the default stays open so native
-  behaviour is unchanged):
-
-  ```nix
-  programs.ccvm.egressAllowlist = [ "github.com" "registry.npmjs.org" "10.0.0.0/8" ];
-  programs.ccvm.egressPorts     = [ 443 ];   # add 80 for plain-HTTP mirrors
+  ```bash
+  ccvm
   ```
 
-  A non-empty list switches the guest to a **default-deny** egress firewall (nftables) that
-  permits only those destinations on those ports — closing the **direct** HTTP(S)
-  exfiltration channel. `api.anthropic.com` is always auto-included. FQDNs are resolved **on
-  the host at launch** into IP rules — reliable for a session, but it IP-pins CDN-fronted
-  hosts, **including `api.anthropic.com` itself**: if its CDN rotates to an edge IP that
-  wasn't pinned at launch, API calls can fail mid-session — restart, or pin a broader CIDR.
-  Two channels deliberately stay open and are **residual** (an SNI/DNS-filtering proxy is the
-  planned stronger layer — [design §3.10](docs/design.md)):
-  - **DNS**, but only to the VM's stub resolver (not to arbitrary servers), so normal name
-    resolution works while direct DNS-to-anywhere is blocked — a determined agent can still
-    *tunnel* low-bandwidth data through the recursive resolver.
-  - **TCP only** on the listed ports (QUIC/UDP 443 is dropped; clients transparently fall back
-    to TCP).
+---
 
-  If the rules fail to apply, the guest **fails closed**: it denies all new egress but keeps
-  the ssh session and DNS alive so you can `--shell` in to debug. If you opt in but nothing
-  resolves (host DNS down), the wrapper **refuses to boot** rather than run with an
-  unenforceable allowlist. Combine with `autoUpdateFiles = false` to also keep project edits
-  in the VM.
+## Options
 
-What ccvm deliberately does **not** do is anonymize traffic (no Tor): the dominant flow is the
-Anthropic API authenticated as you, so anonymity is self-defeating and orthogonal. If you want
-it, run a VPN/Tor on the *host* and the guest rides through it for free (design §3.10).
+  > [!NOTE]
+  > This section will describe ccvm options based on their home-manager module's names. See [alternate option declarations](#Alternate option declarations) for configuration via environment variables and/or flags.
+
+  > [!WARNING]
+  > Egress is open by default (like native `claude`), so a compromised agent could exfiltrate
+  > data — including your OAuth credential when `shareClaudeConfig` is on. Lock it down with
+  > `egressAllowlist`, or auth via API key with `shareClaudeConfig = false`. Full threat model: docs/design.md.
+
+  - `enable`: install the `ccvm` command (default: `false`) (types: `true`/`false`)
+  - `acceleration`: which acceleration type to use (default: `"auto"`) (types: `"auto"`, `"kvm"`, or `"tcg"`)
+  - `apiKeyVariable`: host env var carrying the Anthropic API key, passed to the VM only over SSH (default: `"ANTHROPIC_API_KEY"`) (types: string)
+  - `autoUpdateFiles`: sync the CWD `ccvm` is ran in to and from the host and guest (default: `true`) (types: `true`/`false`)
+  - `cores`: how many vCPUs to allocate to the VM (default: `4`) (types: positive integers)
+  - `egressAllowlist`: FQDN/IP/CIDR egress allowlist — empty = open egress, non-empty = default-deny firewall (default: `[]`) (types: list of strings)
+  - `egressPorts`: destination ports the allowlist permits (default: `[ 443 ]`) (types: list of ports)
+  - `extraClaudeMd`: markdown staged as the guest's `~/.claude/CLAUDE.md` telling the agent it's in ccvm (default: built-in blurb) (types: lines; `""` disables)
+  - `extraGuestModules`: extra NixOS modules merged into the guest, an escape hatch (default: `[]`) (types: list of modules)
+  - `extraPackages`: additional packages to install into the VM (default: `[]`) (types: list of strings)
+  - `lockGuestMemory`: mlock guest RAM so secrets can't be paged to host swap (default: `false`) (types: `true`/`false`)
+  - `memory`: how much RAM in MiB to allocate to the VM (default: `4096`) (types: positive integers)
+  - `package`: the claude-code package to run in the VM (default: `pkgs.claude-code`) (types: package)
+  - `persistClaudeProjects`: mount `~/.claude/projects` read-write so transcripts + memory persist back (cross-run `--resume`); scoped to `projects/` so the OAuth credential never crosses (default: `false`) (types: `true`/`false`)
+  - `shareClaudeConfig`: read-only mount the host `~/.claude` so the VM reuses your login, settings, commands and memory (default: `true`) (types: `true`/`false`)
+  - `shareGitConfig`: stage a sanitized copy of your global git config so in-VM `git` commits as you (no credentials/signing keys cross) (default: `true`) (types: `true`/`false`)
+  - `vmDiskSize`: GiB of opt-in encrypted ephemeral disk at `/scratch`; `0` keeps pure RAM (default: `0`) (types: non-negative integer)
+  - `nix.enable`: enable Nix in the VM (default: `false`) (types: `true`/`false`)
+  - `nix.substituters`: extra binary caches for in-VM Nix (default: `[]`) (types: list of strings)
+  - `nix.trustedPublicKeys`: public keys that verify paths from `nix.substituters` (default: `[]`) (types: list of strings)
+
+### Alternate option declarations
+
+  Per-run env overrides (`CCVM_X == option`):
+
+  - `CCVM_AUTOUPDATE` == `autoUpdateFiles`
+  - `CCVM_ACCEL` == `acceleration`
+  - `CCVM_MEMORY` == `memory`
+  - `CCVM_SHARE_CLAUDE_CONFIG` == `shareClaudeConfig`
+  - `CCVM_PERSIST_PROJECTS` == `persistClaudeProjects`
+  - `CCVM_SHARE_GIT_CONFIG` == `shareGitConfig`
+  - `CCVM_CLAUDE_MD` == `extraClaudeMd`
+  - `CCVM_MLOCK` == `lockGuestMemory`
+  - `CCVM_VM_DISK_SIZE` == `vmDiskSize`
+
+  ccvm-only flags (consumed, never forwarded to `claude`):
+
+  - `--auto-update-files` / `--no-auto-update-files` == `autoUpdateFiles` (== `CCVM_AUTOUPDATE`)
+  - `--shell` (debug shell), `--ccvm-debug` (stream console), `--ccvm-help`, `--ccvm-version`
 
 ---
 
-## How it works (the short version)
+## Installation
 
-A Nix builder (`lib/mkccvm.nix`) evaluates a minimal NixOS guest and bakes its kernel,
-initrd, read-only squashfs store image, and kernel cmdline into a single Bash wrapper. At
-launch the wrapper generates throw-away SSH keys, writes a read-only "seed" the guest
-reads over 9p, boots QEMU headless, waits for sshd, and `ssh -tt`s into the guest in the
-foreground. SSH (not a serial console) is what gives you real-terminal fidelity — it
-carries `TERM`, the window size, and `SIGWINCH`, so resize, `vim`, `less` and vi-mode all
-behave natively. A single cleanup trap guarantees the VM and scratch dir are gone on every
-exit path.
+### home-manager example
 
-The full rationale — including the ephemeral root, the secret-handling path, and the
-"runtime-share trap" that shapes the build — is in [docs/design.md](docs/design.md).
+  1. Install Nix
+
+  You can find the installer at [nixos.org/download](https://nixos.org/download/).
+  You don't need NixOS to use Nix or ccvm. If you aren't on NixOS and don't plan on switching (yet), use the install *script* found at the linked webpage.
+
+  2. Flake configuration
+
+  If you don't already have a repo for your dotfiles, that's fine for now; just make a directory for the flake:
+
+  ```bash
+  mkdir -p ~/Projects/yourConfigRepo
+  ```
+
+  You'll also need nix-command and flakes enabled. To do this on the user-level, add this to `~/.config/nix/nix.conf`:
+
+  ```
+  experimental-features = nix-command flakes
+  ```
+
+  In `yourConfigRepo/flake.nix` (ensure you replace all instances of `yourUsername`):
+
+  ```nix
+  {
+    inputs = {
+      nixpkgs.url = "nixpkgs/nixos-unstable";
+      ccvm = {
+        url = "github:jx-wi/ccvm";
+        inputs.nixpkgs.follows = "nixpkgs";
+      };
+      home-manager = {
+        url = "github:nix-community/home-manager";
+        inputs.nixpkgs.follows = "nixpkgs";
+      };
+    };
+    outputs = {
+      nixpkgs,
+      ccvm,
+      home-manager,
+      ...
+    }:
+    let
+      system = "x86_64-linux";
+      pkgs = import nixpkgs {
+        inherit system;
+      };
+    in
+    {
+      homeConfigurations.yourUsername = home-manager.lib.homeManagerConfiguration {
+        inherit pkgs;
+        modules = [
+          ccvm.homeManagerModules.default
+          ./yourUsername/home.nix
+        ];
+      };
+    };
+  }
+  ```
+
+  Now update the lock file:
+
+  ```bash
+  cd ~/Projects/yourConfigRepo && nix flake update
+  ```
+
+  3. home-manager configuration
+
+  Make a folder in the config repo for your home-manager configuration files if you don't already have one:
+
+  ```bash
+  mkdir -p ~/Projects/yourConfigRepo/yourUsername
+  ```
+
+  In `yourConfigRepo/yourUsername/home.nix` (replace all instances of `yourUsername` again):
+
+  ```nix
+  {
+    pkgs,
+    lib,
+    ...
+  }:
+  {
+    home = {
+      stateVersion = "26.05";
+      username = "yourUsername";
+      homeDirectory = "/home/yourUsername";
+    };
+    programs.ccvm = {
+      enable = true;
+      autoUpdateFiles = true;
+      cores = 4;
+      memory = 8192;
+      nix.enable = true;
+      extraPackages = with pkgs; [
+        bottom
+        delta
+        eza
+        yazi
+      ];
+    };
+    nixpkgs.config.allowUnfreePredicate = pkg: builtins.elem (lib.getName pkg) [
+      "claude-code"
+    ];
+  }
+  ```
+
+  Now switch to your new configuration:
+
+  ```bash
+  nix run nixpkgs#nh -- home switch ~/Projects/yourConfigRepo
+  ```
 
 ---
 
-## Verifying it yourself
+## Roadmap
 
-ccvm's guarantees are checked at three levels:
-
-- **Host-side, in CI (`nix flake check`).** [`tests/host.sh`](tests/host.sh) drives the real
-  wrapper through a dry-run hook (it populates the seed and runs the actual config-staging
-  loop, then stops before booting) and asserts the security-critical invariants with no VM:
-  the `ANTHROPIC_API_KEY` never reaches the seed (it rides `SendEnv` over SSH only), the
-  OAuth credential is never staged into it (top-level *and* nested), escaping host-config
-  symlinks *are* dereferenced, the forwarded argv round-trips byte-for-byte, the ccvm-only
-  flags are consumed (not forwarded) and select the mode, and the egress allowlist stages
-  correctly (default = open; IPs/CIDRs verbatim, FQDNs resolved, ports as an nft list —
-  [`tests/egress.sh`](tests/egress.sh)).
-- **Full boot, locally.** [`tests/boot.sh`](tests/boot.sh) builds a ccvm with a stub `claude`
-  and boots the real VM (TCG by default, so it runs without KVM) to confirm the argv reaches
-  claude, that overlay mode keeps a guest edit ephemeral while rw mode lands it on the host,
-  and that the egress allowlist actually blocks a non-allowlisted host while permitting an
-  allowlisted one. Needs a working VM, so it's a local gate, not a CI check.
-- **Terminal fidelity, by a human.** Resize/`vim`/`less`/vi-mode behaviour is a manual smoke
-  test by nature:
-
-```sh
-ccvm --shell        # debug shell in the guest
-```
-
-Then sanity-check, all of which should feel exactly like your host shell:
-
-- [ ] Resize the terminal window — the prompt reflows, `clear`/`Ctrl-L` works.
-- [ ] `vim somefile` — full-screen redraw, no corruption; `:q` returns cleanly.
-- [ ] `ls | less` — paging, search, resize while open.
-- [ ] zsh vi-mode: `Esc` then `k`/`j` to move through history, `cw` etc.
-- [ ] Colours and Unicode render correctly.
-
-And the read-only safety net — launch with `ccvm --no-auto-update-files`:
-
-- [ ] Inside: `echo hi > scratch && ls`. Outside, on the host: the file is **not** there.
+  - [X] Baseline one-command microVM for Claude Code
+  - [X] Network egress controls
+  - [X] Encrypted disk support
+  - [ ] Authenticated binary cache support
+  - [ ] Dedicated CI server for the boot tests
 
 ---
-
-## Status & limitations
-
-- **x86_64-linux** is the primary, CI-built target; **aarch64-linux** is best-effort
-  (evaluates and is wired up).
-- `shareClaudeConfig` is read-only: changes the in-VM Claude makes to its config (including
-  OAuth token refreshes) stay in the VM and do not persist back to the host.
 
 ## License
 
-MIT © 2026 jx-wi. See [LICENSE](LICENSE).
+  MIT © 2026 Jaxxen. See [LICENSE](LICENSE).
