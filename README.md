@@ -4,11 +4,11 @@
 
 ***100% reproducible from this repository.***
 
-(CI widget here) [![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+[![check](https://github.com/jx-wi/ccvm/actions/workflows/check.yml/badge.svg)](https://github.com/jx-wi/ccvm/actions/workflows/check.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
 ---
 
-**[About](#About) · [Requirements](#Requirements) · [Usage](#Usage) · [Options](#Options) · [Installation](#Installation) · [Roadmap](#Roadmap) · [License](#License)**
+**[About](#about) · [Requirements](#requirements) · [Usage](#usage) · [Options](#options) · [Installation](#installation) · [Roadmap](#roadmap) · [License](#license)**
 
 ---
 
@@ -38,39 +38,41 @@
 ## Options
 
   > [!NOTE]
-  > This section will describe ccvm options based on their home-manager module's names. See [alternate option declarations](#Alternate option declarations) for configuration via environment variables and/or flags.
+  > This section will describe ccvm options based on their home-manager module's names. See [alternate option declarations](#alternate-option-declarations) for configuration via environment variables and/or flags.
 
   > [!WARNING]
   > Egress is open by default (like native `claude`), so a compromised agent could exfiltrate
   > data — including your OAuth credential when `shareClaudeConfig` is on. Lock it down with
-  > `egressAllowlist`, or auth via API key with `shareClaudeConfig = false`. Full threat model: docs/design.md.
+  > `egressAllowlist`, or auth via API key with `shareClaudeConfig = false`. Full threat model: CLAUDE.md.
+
+  Ordered by how often you'll reach for them — essentials first, escape hatches last.
 
   - `enable`: install the `ccvm` command (default: `false`) (types: `true`/`false`)
-  - `acceleration`: which acceleration type to use (default: `"auto"`) (types: `"auto"`, `"kvm"`, or `"tcg"`)
-  - `apiKeyVariable`: host env var carrying the Anthropic API key, passed to the VM only over SSH (default: `"ANTHROPIC_API_KEY"`) (types: string)
-  - `autoUpdateFiles`: sync the CWD `ccvm` is ran in to and from the host and guest (default: `true`) (types: `true`/`false`)
-  - `cores`: how many vCPUs to allocate to the VM (default: `4`) (types: positive integers)
-  - `egressAllowlist`: FQDN/IP/CIDR egress allowlist — empty = open egress, non-empty = default-deny firewall (default: `[]`) (types: list of strings)
-  - `egressPorts`: destination ports the allowlist permits (default: `[ 443 ]`) (types: list of ports)
-  - `extraClaudeMd`: markdown staged as the guest's `~/.claude/CLAUDE.md` telling the agent it's in ccvm (default: built-in blurb) (types: lines; `""` disables)
-  - `extraGuestModules`: extra NixOS modules merged into the guest, an escape hatch (default: `[]`) (types: list of modules)
-  - `extraPackages`: additional packages to install into the VM (default: `[]`) (types: list of strings)
-  - `lockGuestMemory`: mlock guest RAM so secrets can't be paged to host swap (default: `false`) (types: `true`/`false`)
-  - `memory`: how much RAM in MiB to allocate to the VM (default: `4096`) (types: positive integers)
-  - `package`: the claude-code package to run in the VM (default: `pkgs.claude-code`) (types: package)
-  - `persistClaudeProjects`: mount `~/.claude/projects` read-write so transcripts + memory persist back (cross-run `--resume`); scoped to `projects/` so the OAuth credential never crosses (default: `false`) (types: `true`/`false`)
+  - `writableCwd`: mount the host CWD (the project dir `ccvm` was launched in) read-write so the agent's edits land on the host live; `false` keeps the CWD read-only with edits in an ephemeral overlay discarded on exit. Only this one directory ever crosses to the host (default: `true`) (types: `true`/`false`)
   - `shareClaudeConfig`: read-only mount the host `~/.claude` so the VM reuses your login, settings, commands and memory (default: `true`) (types: `true`/`false`)
-  - `shareGitConfig`: stage a sanitized copy of your global git config so in-VM `git` commits as you (no credentials/signing keys cross) (default: `true`) (types: `true`/`false`)
-  - `vmDiskSize`: GiB of opt-in encrypted ephemeral disk at `/scratch`; `0` keeps pure RAM (default: `0`) (types: non-negative integer)
+  - `memory`: how much RAM in MiB to allocate to the VM (default: `4096`) (types: positive integers)
+  - `cores`: how many vCPUs to allocate to the VM (default: `4`) (types: positive integers)
+  - `acceleration`: which acceleration type to use (default: `"auto"`) (types: `"auto"`, `"kvm"`, or `"tcg"`)
+  - `extraPackages`: additional packages to install into the VM (default: `[]`) (types: list of strings)
   - `nix.enable`: enable Nix in the VM (default: `false`) (types: `true`/`false`)
   - `nix.substituters`: extra binary caches for in-VM Nix (default: `[]`) (types: list of strings)
   - `nix.trustedPublicKeys`: public keys that verify paths from `nix.substituters` (default: `[]`) (types: list of strings)
+  - `shareGitConfig`: stage a sanitized copy of your global git config so in-VM `git` commits as you (no credentials/signing keys cross) (default: `true`) (types: `true`/`false`)
+  - `persistClaudeProjects`: mount `~/.claude/projects` read-write so transcripts + memory persist back (cross-run `--resume`); scoped to `projects/` so the OAuth credential never crosses (default: `false`) (types: `true`/`false`)
+  - `egressAllowlist`: FQDN/IP/CIDR egress allowlist — empty = open egress, non-empty = default-deny firewall (default: `[]`) (types: list of strings)
+  - `egressPorts`: destination ports the allowlist permits (default: `[ 443 ]`) (types: list of ports)
+  - `vmDiskSize`: GiB of opt-in encrypted ephemeral disk at `/scratch`; `0` keeps pure RAM (default: `0`) (types: non-negative integer)
+  - `lockGuestMemory`: mlock guest RAM so secrets can't be paged to host swap (default: `false`) (types: `true`/`false`)
+  - `apiKeyVariable`: host env var carrying the Anthropic API key, passed to the VM only over SSH (default: `"ANTHROPIC_API_KEY"`) (types: string)
+  - `extraClaudeMd`: markdown staged as the guest's `~/.claude/CLAUDE.md` telling the agent it's in ccvm (default: built-in blurb) (types: lines; `""` disables)
+  - `package`: the claude-code package to run in the VM (default: `pkgs.claude-code`) (types: package)
+  - `extraGuestModules`: extra NixOS modules merged into the guest, an escape hatch (default: `[]`) (types: list of modules)
 
 ### Alternate option declarations
 
   Per-run env overrides (`CCVM_X == option`):
 
-  - `CCVM_AUTOUPDATE` == `autoUpdateFiles`
+  - `CCVM_WRITABLE_CWD` == `writableCwd`
   - `CCVM_ACCEL` == `acceleration`
   - `CCVM_MEMORY` == `memory`
   - `CCVM_SHARE_CLAUDE_CONFIG` == `shareClaudeConfig`
@@ -82,7 +84,7 @@
 
   ccvm-only flags (consumed, never forwarded to `claude`):
 
-  - `--auto-update-files` / `--no-auto-update-files` == `autoUpdateFiles` (== `CCVM_AUTOUPDATE`)
+  - `--writable-cwd` / `--read-only-cwd` == `writableCwd` (== `CCVM_WRITABLE_CWD`)
   - `--shell` (debug shell), `--ccvm-debug` (stream console), `--ccvm-help`, `--ccvm-version`
 
 ---
@@ -179,7 +181,7 @@
     };
     programs.ccvm = {
       enable = true;
-      autoUpdateFiles = true;
+      writableCwd = true;
       cores = 4;
       memory = 8192;
       nix.enable = true;
