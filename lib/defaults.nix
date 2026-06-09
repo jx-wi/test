@@ -7,7 +7,7 @@
 { pkgs }:
 {
   package = pkgs.claude-code; # the claude-code package to run inside the VM (unfree)
-  autoUpdateFiles = true; # true = live host edits (rw, native); false = ephemeral overlay
+  writableCwd = true; # true = host CWD writable, edits land live (rw, native); false = read-only, ephemeral overlay
   memory = 4096; # guest RAM in MiB (runtime QEMU arg; CCVM_MEMORY overrides per run)
   cores = 4; # guest vCPUs
   acceleration = "auto"; # VM CPU accel: "auto" (KVM w/ TCG fallback) | "kvm" (require KVM, error if unusable) | "tcg" (force emulation). Per-run: CCVM_ACCEL

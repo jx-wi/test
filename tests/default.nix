@@ -47,7 +47,7 @@ let
           "console=ttyS0" # APPEND
           "4096" # MEMORY
           "4" # CORES
-          "rw" # MODE          (production default: autoUpdateFiles=true)
+          "rw" # MODE          (production default: writableCwd=true)
           "ANTHROPIC_API_KEY" # APIKEYVAR
           "1" # SHARECLAUDE      (production default: shareClaudeConfig=true)
           "0" # PERSISTPROJECTS  (production default: persistClaudeProjects=false)

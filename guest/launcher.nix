@@ -108,10 +108,10 @@ let
       mkdir -p "$workdir"
 
       if [ "$mode" = "rw" ]; then
-        # autoUpdateFiles=true: edits land on the host live.
+        # writableCwd=true (default): edits land on the host live.
         mount -t 9p -o ${p9} ccvm-workspace "$workdir"
       else
-        # autoUpdateFiles=false (default): host tree read-only as the overlay lower,
+        # writableCwd=false: host tree read-only as the overlay lower,
         # a tmpfs upper for the agent's ephemeral edits. Writes never reach the host.
         mkdir -p /run/ccvm-lower /run/ccvm-upper /run/ccvm-work
         mount -t 9p -o ${p9},ro ccvm-workspace /run/ccvm-lower
@@ -172,7 +172,7 @@ let
       # it did (marker present) -> SHARE that pool; it didn't -> this service OWNS the disk and formats
       # a standalone /scratch. Invariants common to both, however the disk gets opened:
       #   * the LUKS key is generated in GUEST RAM and never crosses 9p — the host only ever sees
-      #     ciphertext (same spirit as the API key, §3.7);
+      #     ciphertext (same spirit as the API key);
       #   * wipe-on-exit is cryptographic — the key dies with guest RAM at power-off, so the on-disk
       #     image is inert the instant qemu stops, even on a crash that skips the host-side rm;
       #   * FAIL-OPEN throughout — any hiccup logs and continues WITHOUT /scratch (the agent still has
@@ -252,7 +252,8 @@ let
         #   * DNS only to the slirp stub resolver (10.0.2.3 / fec0::3), NOT to any host — normal
         #     resolution via systemd-resolved still works, but a compromised agent can't tunnel
         #     data out to an arbitrary DNS server (DNS through the recursive resolver is the
-        #     residual covert channel an SNI/DNS-filtering proxy would address — see design §3.10)
+        #     residual covert channel an SNI/DNS-filtering proxy would address — see CLAUDE.md,
+        #     "Egress: an allowlist, not Tor")
         #   * DHCPv4 lease renewal
         #   * IPv6 NDP (neighbor/router discovery) so IPv6 doesn't black-hole and stall
         #     happy-eyeballs; without it `policy drop` would silently break v6.

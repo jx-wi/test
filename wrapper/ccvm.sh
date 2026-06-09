@@ -5,7 +5,7 @@
 # writeShellApplication supplies the shebang and `set -euo pipefail`. The @TOKENS@
 # below are substituted with store paths / config at build time by lib/mkccvm.nix.
 #
-# Flow (see docs/design.md and spec §5): generate throwaway SSH keys, pin the guest
+# Flow (see CLAUDE.md): generate throwaway SSH keys, pin the guest
 # host key, write a read-only "seed" the guest reads over 9p, boot QEMU headless in the
 # background, wait for sshd, then `ssh -tt` into it in the FOREGROUND (never exec — the
 # wrapper must regain control to tear the VM down). A single trap guarantees the qemu
@@ -23,7 +23,7 @@ SHARECLAUDE="@SHARECLAUDE@"
 PERSISTPROJECTS="@PERSISTPROJECTS@" # 1 = mount host ~/.claude/projects rw (resume + memory persist); 0 = off
 SHAREGIT="@SHAREGIT@" # 1 = stage a sanitized host git config into the guest; 0 = off
 CLAUDEMD="@CLAUDEMD@" # path to the baked ccvm-context CLAUDE.md (empty = inject nothing)
-MODE="@MODE@" # rw (autoUpdateFiles=true, default — mirrors native claude) | overlay (secure)
+MODE="@MODE@" # rw (writableCwd=true, default — mirrors native claude) | overlay (secure)
 MEMLOCK="@MEMLOCK@" # 1 = mlock guest RAM (lockGuestMemory) so it can't hit host swap; 0 = off
 EGRESSALLOW="@EGRESSALLOW@" # space-separated FQDN/IP/CIDR allowlist; empty = open egress (default)
 EGRESSPORTS="@EGRESSPORTS@" # space-separated dst ports the allowlist permits (default 443)
@@ -51,8 +51,8 @@ All arguments are forwarded verbatim to `claude` EXCEPT ccvm's own flags below
 ccvm flags:
   --shell                 Drop into a guest shell instead of launching claude.
   --ccvm-debug            Stream the guest console while booting; keep the scratch dir.
-  --auto-update-files     Mirror edits LIVE to the host project dir (rw mode).
-  --no-auto-update-files  Keep edits in an ephemeral overlay, discarded on exit.
+  --writable-cwd          Host CWD writable — edits land LIVE on the host (rw mode).
+  --read-only-cwd         Host CWD read-only — edits ephemeral, discarded on exit.
   --ccvm-help             Show this help and exit.
   --ccvm-version          Print the ccvm version and exit.
 
@@ -60,7 +60,7 @@ Per-run environment overrides (a CCVM_* var overrides the baked default; an expl
 flag wins over the env var):
   CCVM_SHELL=1                 same as --shell
   CCVM_DEBUG=1                 same as --ccvm-debug
-  CCVM_AUTOUPDATE=0|1          file-sharing mode (overlay | rw)
+  CCVM_WRITABLE_CWD=0|1        host CWD writable (rw) or read-only (overlay)
   CCVM_SHARE_CLAUDE_CONFIG=0|1 reuse the host ~/.claude (login, settings, memory)
   CCVM_PERSIST_PROJECTS=0|1    persist ~/.claude/projects (resume + memory) to the host
   CCVM_SHARE_GIT_CONFIG=0|1    stage a sanitized host git config into the guest
@@ -70,7 +70,7 @@ flag wins over the env var):
   CCVM_ACCEL=auto|kvm|tcg      override the acceleration mode for this run
   CCVM_MACHINE=<type>          QEMU machine type (default microvm on x86_64)
 
-See the README and docs/design.md for the threat model and full option reference.
+See the README for the full option reference (and CLAUDE.md for the threat model).
 EOF
 }
 
@@ -154,7 +154,7 @@ cleanup() {
 
 # Returns a free localhost TCP port. A connect that fails means nothing is listening, so
 # the port is (very likely) free. A tiny TOCTOU race to the qemu bind is acceptable for a
-# localhost dev tool (spec §3.2).
+# localhost dev tool.
 pick_port() {
   local p _
   for _ in $(seq 1 50); do
@@ -224,8 +224,8 @@ for arg in "$@"; do
     --ccvm-debug) DEBUG=1 ;;
     # ccvm-only file-sharing toggles. Consumed here (never appended to FWD), so they are
     # NOT forwarded to claude — claude still receives only the user's own arguments.
-    --auto-update-files) MODE_OVERRIDE=rw ;;
-    --no-auto-update-files) MODE_OVERRIDE=overlay ;;
+    --writable-cwd) MODE_OVERRIDE=rw ;;
+    --read-only-cwd) MODE_OVERRIDE=overlay ;;
     # ccvm's own help/version. Namespaced (--ccvm-*) so bare --help/--version still pass
     # through to claude, preserving transparent passthrough.
     --ccvm-help) SHOW_HELP=1 ;;
@@ -245,9 +245,9 @@ if [[ $SHOW_VERSION == 1 ]]; then
   exit 0
 fi
 
-# File-sharing mode precedence: an explicit ccvm flag wins, else the CCVM_AUTOUPDATE env
-# var, else the baked default (autoUpdateFiles, now true by default).
-case "${CCVM_AUTOUPDATE:-}" in
+# File-sharing mode precedence: an explicit ccvm flag wins, else the CCVM_WRITABLE_CWD env
+# var, else the baked default (writableCwd, true by default).
+case "${CCVM_WRITABLE_CWD:-}" in
   1 | true | yes) MODE=rw ;;
   0 | false | no) MODE=overlay ;;
 esac
@@ -492,7 +492,7 @@ if [[ $SHARECLAUDE == 1 ]]; then
     # mount and claude can't read its config. Stage the *dereferenced contents* of every
     # escaping symlink into the seed; the guest lays them over the overlay so the config is
     # actually readable. .credentials.json is never followed — the OAuth secret keeps riding
-    # the read-only 9p mount and is never copied into the seed (§3.7).
+    # the read-only 9p mount and is never copied into the seed.
     while IFS= read -r -d '' link; do
       rel="${link#"$CFGPATH/"}"
       [[ $rel == ".credentials.json" ]] && continue
@@ -505,7 +505,7 @@ if [[ $SHARECLAUDE == 1 ]]; then
     # Defense in depth: the per-link guard above matches only a *top-level*
     # .credentials.json, but `cp -rL` of an escaping directory symlink can drag a nested
     # one in. The OAuth secret must never reach the on-disk seed (it rides the read-only
-    # 9p mount only — §3.7), so strip any .credentials.json the staging produced, at any
+    # 9p mount only), so strip any .credentials.json the staging produced, at any
     # depth. Invariant check: grep the seed for the credential -> zero hits.
     find "$SEED/config-deref" -name '.credentials.json' -delete 2>/dev/null || true
   fi
@@ -532,7 +532,7 @@ fi
 # ---- encrypted ephemeral disk pool (opt-in: vmDiskSize) --------------------
 # vmDiskSize (GiB) attaches a raw SPARSE virtio-blk image the guest will LUKS-encrypt with a key
 # it generates in its OWN RAM — the key never crosses 9p, so the host only ever sees ciphertext
-# (same spirit as the API key, §3.7). It is the VM's writable disk POOL for bulk, non-secret data
+# (same spirit as the API key). It is the VM's writable disk POOL for bulk, non-secret data
 # that would OOM the RAM-backed tmpfs: a /scratch mount today (build outputs, node_modules,
 # caches) and, once the writable-store increment lands, an overlay upper for /nix/store. HOME and
 # root stay tmpfs, so secrets never leave guest RAM. The image MUST live in a disk-backed dir,
@@ -624,14 +624,14 @@ fi
 # at ~/.claude/CLAUDE.md (appending to any host-shared one). Staged via the seed — never a
 # claude flag — so transparent passthrough holds. We PREPEND a runtime-accurate note about the
 # current file-sharing mode, which the build-time-baked file cannot know (mode is resolved per
-# run via flags / CCVM_AUTOUPDATE). Empty CLAUDEMD (extraClaudeMd="" or CCVM_CLAUDE_MD=) => skip.
+# run via flags / CCVM_WRITABLE_CWD). Empty CLAUDEMD (extraClaudeMd="" or CCVM_CLAUDE_MD=) => skip.
 if [[ -n $CLAUDEMD && -r $CLAUDEMD ]]; then
   {
     printf '# ccvm session\n\n'
     if [[ $MODE == rw ]]; then
-      printf 'File edits in the project directory are written LIVE to the host filesystem (autoUpdateFiles=true) — treat changes here as real edits to the user'\''s working tree.\n\n'
+      printf 'File edits in the project directory are written LIVE to the host filesystem (writableCwd=true) — treat changes here as real edits to the user'\''s working tree.\n\n'
     else
-      printf 'File edits are kept in an ephemeral overlay and are DISCARDED when the VM exits — they do NOT reach the host (autoUpdateFiles=false). Anything worth keeping must be exported before exit (e.g. committed and pushed, or copied out by the user).\n\n'
+      printf 'File edits are kept in an ephemeral overlay and are DISCARDED when the VM exits — they do NOT reach the host (writableCwd=false). Anything worth keeping must be exported before exit (e.g. committed and pushed, or copied out by the user).\n\n'
     fi
     if [[ $PERSISTPROJECTS == 1 ]]; then
       printf 'Your session history and memory PERSIST to the host this run (CCVM_PERSIST_PROJECTS is on), so saved memory survives and sessions can be resumed later.\n\n'

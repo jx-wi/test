@@ -12,7 +12,7 @@ let
   defaults = import ../lib/defaults.nix { inherit pkgs; };
   ccvmPkg = (mkCcvm {
     inherit (cfg)
-      package autoUpdateFiles memory cores acceleration extraPackages
+      package writableCwd memory cores acceleration extraPackages
       apiKeyVariable shareClaudeConfig persistClaudeProjects shareGitConfig extraClaudeMd
       lockGuestMemory vmDiskSize egressAllowlist egressPorts extraGuestModules
       # programs.ccvm.nix.{enable,substituters,trustedPublicKeys} passes straight through — the
@@ -31,15 +31,16 @@ in
       description = "The claude-code package to run inside the VM (unfree; override/pin as you like).";
     };
 
-    autoUpdateFiles = lib.mkOption {
+    writableCwd = lib.mkOption {
       type = lib.types.bool;
-      default = defaults.autoUpdateFiles;
+      default = defaults.writableCwd;
       description = ''
-        true (default): the host project is mounted read-write; edits land on the host
-        live — identical to native `claude`. false (secure): the host project is read-only
-        to the agent; edits are ephemeral and vanish on exit; export via `git push`.
-        Per-run override: `ccvm --no-auto-update-files` / `--auto-update-files`, or
-        `CCVM_AUTOUPDATE=0|1`.
+        true (default): the host CWD (the project dir `ccvm` was launched in) is mounted
+        read-write; the agent's edits land on the host live — identical to native `claude`.
+        false (secure): the host CWD is read-only; the agent still sees and edits a full
+        tree, but writes go to an ephemeral overlay and vanish on exit (export via `git
+        push`). Only this one directory ever crosses to the host. Per-run override:
+        `ccvm --read-only-cwd` / `--writable-cwd`, or `CCVM_WRITABLE_CWD=0|1`.
       '';
     };
 
@@ -216,7 +217,7 @@ in
         ciphertext) and the host image is removed. The host image dir is
         ''${XDG_CACHE_HOME:-~/.cache}/ccvm by default (override CCVM_SCRATCH_DIR); a tmpfs target is
         refused unless CCVM_SCRATCH_ALLOW_TMPFS=1. Sparse, so it only consumes what's written up to
-        the cap. Per-run override: CCVM_VM_DISK_SIZE=<GiB>|0. See design §3.11.
+        the cap. Per-run override: CCVM_VM_DISK_SIZE=<GiB>|0.
       '';
     };
 

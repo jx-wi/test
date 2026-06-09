@@ -5,7 +5,7 @@
 # closure, and the kernel cmdline — then bakes their store paths (plus the scalar
 # config) into wrapper/ccvm.sh. The workspace 9p share and SSH port are NOT baked: they
 # are only known at launch time, so the wrapper constructs those QEMU args at runtime
-# (this is the microvm.nix runtime-share trap; see docs/design.md §3.8).
+# (this is the microvm.nix runtime-share trap; see CLAUDE.md, "Config flows through @TOKENS@").
 #
 # Called from both the flake (standalone `nix run`) and the home-manager module, always
 # with the caller's own `pkgs`, so guest and host stay on one nixpkgs.
@@ -132,7 +132,7 @@ let
         append
         (toString config.memory)
         (toString config.cores)
-        (if config.autoUpdateFiles then "rw" else "overlay")
+        (if config.writableCwd then "rw" else "overlay")
         config.apiKeyVariable
         (if config.shareClaudeConfig then "1" else "0")
         (if config.persistClaudeProjects then "1" else "0")

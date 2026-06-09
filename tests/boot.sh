@@ -138,9 +138,9 @@ grep -qa '^NIX:absent$' <<<"$OUT" &&
   ok "default: nix is absent from the guest (lean closure)" || no "default: nix unexpectedly present"
 rm -rf "$PROJ_RW"
 
-# ---- overlay (--no-auto-update-files): the write stays in the VM -----------
+# ---- overlay (--read-only-cwd): the write stays in the VM -----------
 PROJ_RO="$(mktemp -d)"
-OUT="$(run_capture "$WRAP" "$PROJ_RO" --no-auto-update-files hi)"
+OUT="$(run_capture "$WRAP" "$PROJ_RO" --read-only-cwd hi)"
 grep -qa 'WRITE:ok' <<<"$OUT" &&
   ok "overlay mode: guest writes its tmpfs upper" || no "overlay: guest write failed"
 [ ! -e "$PROJ_RO/ccvm-boot-write" ] &&

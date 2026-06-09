@@ -8,7 +8,7 @@
 # Required env:
 #   CCVM   path to a ccvm wrapper built with dummy boot artifacts (tests/default.nix).
 #
-# Covers the security-critical invariants from CLAUDE.md / design §3.7:
+# Covers the security-critical invariants from CLAUDE.md:
 #   * the API key never reaches the seed (it rides SendEnv over SSH only),
 #   * the OAuth credential is never staged into the seed (top-level *and* nested),
 #   * escaping host-config symlinks (home-manager) ARE dereferenced into the seed,
@@ -134,13 +134,13 @@ fi
 # ===========================================================================
 # 4. ccvm-only flags are consumed (not forwarded) and select the mode.
 # ===========================================================================
-SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 run --no-auto-update-files --model x)/seed"
-[[ "$(cat "$SEED/mode")" == overlay ]] && ok "--no-auto-update-files selects overlay mode" ||
+SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 run --read-only-cwd --model x)/seed"
+[[ "$(cat "$SEED/mode")" == overlay ]] && ok "--read-only-cwd selects overlay mode" ||
   no "mode not overlay (got $(cat "$SEED/mode"))"
 declare -a EXPECT_FWD=(--model x)
 mapfile -t -d "" GOT <"$SEED/claude-args"
 if [[ "${GOT[*]@Q}" == "${EXPECT_FWD[*]@Q}" ]]; then
-  ok "--no-auto-update-files consumed, not forwarded to claude"
+  ok "--read-only-cwd consumed, not forwarded to claude"
 else
   no "ccvm flag leaked into claude argv: ${GOT[*]@Q}"
 fi
@@ -288,7 +288,7 @@ grep -q 'do NOT persist across runs' "$CM" 2>/dev/null &&
   no "claude-md: missing the ephemeral-memory / prefer-codebase guidance"
 
 # Overlay run: the mode line must flip to the DISCARDED warning (and not claim LIVE).
-SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 run --no-auto-update-files)/seed"
+SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 run --read-only-cwd)/seed"
 CM="$SEED/claude-md"
 if grep -q 'DISCARDED' "$CM" 2>/dev/null && ! grep -q 'LIVE to the host' "$CM" 2>/dev/null; then
   ok "claude-md: overlay mode prepends the DISCARDED-edits warning"
