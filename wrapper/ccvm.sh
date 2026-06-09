@@ -385,13 +385,14 @@ case "$ACCEL_MODE" in
     ;;
 esac
 
-# Auth is optional. If present, the API key rides the encrypted SSH channel via
-# SendEnv -> AcceptEnv — never on disk or argv. With neither a key nor shared host
-# config, claude simply starts unauthenticated: run its in-VM `/login` (web/OAuth)
-# flow — copy the printed URL into your browser, paste the code back. Anything obtained
-# that way lives only in the VM's tmpfs and evaporates on exit (ephemeral, by design).
-if [[ $SHELL_MODE != 1 && $SHARECLAUDE != 1 && -z ${!APIKEYVAR:-} ]]; then
-  warn "\$$APIKEYVAR is not set and shareClaudeConfig is off — starting Claude unauthenticated. Run /login inside the VM for web auth (its credentials stay in the VM and vanish on exit)."
+# Auth is optional, and shareClaudeConfig does NOT provide it: the host login (the OAuth
+# credential) is deliberately not shared into the VM. If present, the API key rides the
+# encrypted SSH channel via SendEnv -> AcceptEnv — never on disk or argv. With no key, claude
+# starts unauthenticated: run its in-VM `/login` (web/OAuth) flow — copy the printed URL into
+# your browser, paste the code back. Anything obtained that way lives only in the VM's tmpfs
+# and evaporates on exit (ephemeral, by design).
+if [[ $SHELL_MODE != 1 && -z ${!APIKEYVAR:-} ]]; then
+  warn "\$$APIKEYVAR is not set — starting Claude unauthenticated (shareClaudeConfig shares your settings and memory, not your login). Run /login inside the VM for web auth, or set \$$APIKEYVAR; either way the credential stays in the VM and vanishes on exit."
 fi
 
 # mlock preflight: QEMU started with mem-lock=on aborts if it cannot lock the guest RAM, so
@@ -481,12 +482,13 @@ STORE_ARGS+=(-device "virtio-blk-$BUS,drive=store")
 WS_FSDEV="local,id=ws,path=$WORKDIR,security_model=none"
 [[ $MODE == overlay ]] && WS_FSDEV="$WS_FSDEV,readonly=on"
 
-# Optional: the host's Claude config, read-only — reuse your host login, settings, custom
-# commands and global memory inside the VM. The ~/.claude directory rides a read-only 9p
-# mount, so the OAuth credential it contains is never copied into the scratch dir. The
-# separate home-root ~/.claude.json (non-secret config) is staged through the seed. The
-# guest overlays both onto a writable tmpfs, so claude's writes are ephemeral and never
-# reach the host.
+# Optional: the host's Claude config, read-only — reuse your settings, custom commands and
+# global memory inside the VM. NOT your login: the OAuth credential is excluded — kept out of
+# the seed here, and hidden from the config view in the guest (guest/launcher.nix) — so the VM
+# authenticates with your own /login or API key, never the host's stored token. The ~/.claude
+# directory rides a read-only 9p mount; the separate home-root ~/.claude.json (config, not the
+# token) is staged through the seed. The guest overlays config onto a writable tmpfs, so
+# claude's writes are ephemeral and never reach the host.
 CONFIG_ARGS=()
 if [[ $SHARECLAUDE == 1 ]]; then
   if [[ -d "$HOME/.claude" ]]; then
@@ -501,8 +503,8 @@ if [[ $SHARECLAUDE == 1 ]]; then
     # Those targets are absent from the guest, so the symlinks dangle on the read-only 9p
     # mount and claude can't read its config. Stage the *dereferenced contents* of every
     # escaping symlink into the seed; the guest lays them over the overlay so the config is
-    # actually readable. .credentials.json is never followed — the OAuth secret keeps riding
-    # the read-only 9p mount and is never copied into the seed.
+    # actually readable. .credentials.json is never followed — the OAuth secret is never copied
+    # into the seed (and is excluded from the config view in the guest, so it never crosses).
     while IFS= read -r -d '' link; do
       rel="${link#"$CFGPATH/"}"
       [[ $rel == ".credentials.json" ]] && continue
@@ -514,9 +516,9 @@ if [[ $SHARECLAUDE == 1 ]]; then
     done < <(find "$CFGPATH" -type l -print0 2>/dev/null)
     # Defense in depth: the per-link guard above matches only a *top-level*
     # .credentials.json, but `cp -rL` of an escaping directory symlink can drag a nested
-    # one in. The OAuth secret must never reach the on-disk seed (it rides the read-only
-    # 9p mount only), so strip any .credentials.json the staging produced, at any
-    # depth. Invariant check: grep the seed for the credential -> zero hits.
+    # one in. The OAuth secret must never reach the on-disk seed, so strip any
+    # .credentials.json the staging produced, at any depth. Invariant check: grep the
+    # seed for the credential -> zero hits.
     find "$SEED/config-deref" -name '.credentials.json' -delete 2>/dev/null || true
   fi
   [[ -f "$HOME/.claude.json" ]] && cp "$HOME/.claude.json" "$SEED/claude-json"

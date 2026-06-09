@@ -30,8 +30,15 @@ else
   echo "WRITE:denied"
 fi
 # Report host-config visibility (only present when shareClaudeConfig is on and the host has it).
+# shareClaudeConfig shares settings but must EXCLUDE the OAuth credential: it must be reachable
+# neither via the overlay (~/.claude, where it's whited out) nor via the raw read-only lower
+# (mounted under root-private /run/ccvm-priv). boot.sh asserts settings ARE readable, credential NOT.
 [ -r "$HOME/.claude/settings.json" ] && echo "CONFIG:settings-readable"
-[ -e "$HOME/.claude/.credentials.json" ] && echo "CONFIG:credential-present"
+if [ -r "$HOME/.claude/.credentials.json" ] || [ -r /run/ccvm-priv/host-claude/.credentials.json ]; then
+  echo "CONFIG:credential-readable"
+else
+  echo "CONFIG:credential-excluded"
+fi
 
 # persistClaudeProjects: in the persist posture ~/.claude/projects is a read-WRITE 9p mount of the
 # host's projects dir — and ONLY that subpath (the credential at the ~/.claude root is never

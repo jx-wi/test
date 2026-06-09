@@ -140,12 +140,15 @@ in
       default = defaults.shareClaudeConfig;
       description = ''
         true (default): read-only mount the host's ~/.claude config into the VM (and copy
-        ~/.claude.json), so it reuses your host login, settings, custom commands and global
-        memory instead of authenticating fresh — like native `claude`. home-manager symlinks
-        (e.g. settings.json -> /nix/store/…) are dereferenced so they resolve inside the VM.
-        Claude's writes go to an ephemeral overlay and do not persist back to the host; the
-        OAuth credential is exposed read-only and never copied to disk. false: share nothing
-        from ~/.claude (more isolated). Per-run override: `CCVM_SHARE_CLAUDE_CONFIG=0|1`.
+        ~/.claude.json), so it reuses your settings, custom commands and global memory — like
+        native `claude`. home-manager symlinks (e.g. settings.json -> /nix/store/…) are
+        dereferenced so they resolve inside the VM. Claude's writes go to an ephemeral overlay
+        and do not persist back to the host. It does NOT share your login: the OAuth credential
+        is excluded (kept out of the seed and hidden from the config view in the guest), so the
+        VM authenticates with your own `/login` (web/OAuth, ephemeral) or an API key — never the
+        host's stored token. This avoids the in-VM token refresh that would otherwise rotate and
+        invalidate your host login. false: share nothing from ~/.claude (more isolated). Per-run
+        override: `CCVM_SHARE_CLAUDE_CONFIG=0|1`.
       '';
     };
 
@@ -259,12 +262,15 @@ in
       example = lib.literalExpression ''[ "github.com" "registry.npmjs.org" "10.0.0.0/8" ]'';
       description = ''
         Opt-in network egress allowlist. Empty (default) keeps egress fully OPEN, so the
-        agent reaches anything like native `claude` (this is the deliberate native-mirroring
-        default). A non-empty list switches the guest to a DEFAULT-DENY egress firewall that
-        permits only these destinations on `egressPorts`, plus DNS — closing the
-        prompt-injection exfiltration channel. Entries may be FQDNs (resolved on the host at
-        launch into IP rules; reliable for a session but IP-pins CDN-fronted hosts),
-        bare IPs, or CIDRs. `api.anthropic.com` is always auto-included so auth never breaks.
+        agent reaches anything like native `claude` (the deliberate native-mirroring default).
+        A non-empty list switches the guest to a DEFAULT-DENY egress firewall that permits only
+        these destinations on `egressPorts`, plus DNS — closing the prompt-injection
+        exfiltration channel. Entries may be FQDNs, bare IPs, or CIDRs. `api.anthropic.com` is
+        always auto-included so auth never breaks. CAVEAT: FQDNs are resolved on the host at
+        launch and pinned as fixed IP rules, so a round-robin / CDN-fronted host (e.g.
+        `github.com`, sometimes npm) whose live IPs differ from that launch-time snapshot is
+        silently dropped — the request just hangs. For those, allow a CIDR instead (e.g. GitHub
+        publishes its ranges at api.github.com/meta). See CLAUDE.md, "Egress".
       '';
     };
 

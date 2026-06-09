@@ -45,6 +45,10 @@
   > The first run builds the VM image, so it takes a few minutes; after that it's cached and
   > starts quickly.
 
+  > [!NOTE]
+  > ccvm brings your `~/.claude` settings into the VM but not your login, so `/login` on first
+  > run (it stays in the VM and is wiped on exit) or set `ANTHROPIC_API_KEY`.
+
 ---
 
 ## Security
@@ -56,22 +60,28 @@
   Two things worth knowing about the defaults (which are tuned to feel exactly like native
   `claude`):
 
-  - The VM can reach the internet freely, and it reuses your existing Claude login. So a
-    misbehaving or prompt-injected agent could, in principle, send your project files or login
-    token somewhere it shouldn't.
-  - Locking that down is one setting — restrict where the VM is allowed to connect:
+  - The VM can reach the internet freely, so a misbehaving or prompt-injected agent could, in
+    principle, send your project files somewhere they shouldn't. Locking that down is one
+    setting — restrict where the VM is allowed to connect:
 
     ```nix
     programs.ccvm.egressAllowlist = [ "github.com" "registry.npmjs.org" ];
     # api.anthropic.com is always allowed, so Claude keeps working.
     ```
 
-  For the strictest setup, also stop sharing your Claude config and authenticate with an API
-  key instead, so your login token never enters the VM at all:
+    > [!NOTE]
+    > Allowlisted FQDNs are pinned to their IPs at launch, so a round-robin host like
+    > `github.com` can end up dropped — the request just hangs — when its live IPs drift from
+    > that snapshot. Allow a CIDR for those; GitHub lists its ranges at `api.github.com/meta`.
 
-  ```nix
-  programs.ccvm.shareClaudeConfig = false;  # use the ANTHROPIC_API_KEY env var instead
-  ```
+  - The VM does **not** reuse your Claude login. `shareClaudeConfig` brings your settings,
+    commands and memory across, but never the credential — so you `/login` inside the VM (it
+    stays there and is wiped on exit) or set `ANTHROPIC_API_KEY`. To share nothing from
+    `~/.claude` at all:
+
+    ```nix
+    programs.ccvm.shareClaudeConfig = false;
+    ```
 
   The full threat model and design rationale live in [CLAUDE.md](CLAUDE.md).
 
@@ -84,14 +94,14 @@
 
   > [!WARNING]
   > Egress is open by default (like native `claude`), so a compromised agent could exfiltrate
-  > data — including your OAuth credential when `shareClaudeConfig` is on. Lock it down with
-  > `egressAllowlist`, or auth via API key with `shareClaudeConfig = false`. Full threat model: CLAUDE.md.
+  > your project files (and anything you authenticate with inside the VM). Lock it down with
+  > `egressAllowlist`. Full threat model: CLAUDE.md.
 
   Ordered by how often you'll reach for them — essentials first, escape hatches last.
 
   - `enable`: install the `ccvm` command (default: `false`) (types: `true`/`false`)
   - `writableCwd`: mount the host CWD (the project dir `ccvm` was launched in) read-write so the agent's edits land on the host live; `false` keeps the CWD read-only with edits in an ephemeral overlay discarded on exit. Only this one directory ever crosses to the host (default: `true`) (types: `true`/`false`)
-  - `shareClaudeConfig`: read-only mount the host `~/.claude` so the VM reuses your login, settings, commands and memory (default: `true`) (types: `true`/`false`)
+  - `shareClaudeConfig`: read-only mount the host `~/.claude` so the VM reuses your settings, commands and memory — not your login (the OAuth credential is excluded; you `/login` in-VM or use an API key) (default: `true`) (types: `true`/`false`)
   - `memory`: how much RAM in MiB to allocate to the VM (default: `4096`) (types: positive integers)
   - `cores`: how many vCPUs to allocate to the VM (default: `4`) (types: positive integers)
   - `acceleration`: which acceleration type to use (default: `"auto"`) (types: `"auto"`, `"kvm"`, or `"tcg"`)
@@ -100,7 +110,7 @@
   - `nix.substituters`: extra binary caches for in-VM Nix (default: `[]`) (types: list of strings)
   - `nix.trustedPublicKeys`: public keys that verify paths from `nix.substituters` (default: `[]`) (types: list of strings)
   - `shareGitConfig`: stage a sanitized copy of your global git config so in-VM `git` commits as you (no credentials/signing keys cross) (default: `true`) (types: `true`/`false`)
-  - `persistClaudeProjects`: mount `~/.claude/projects` read-write so transcripts + memory persist back (cross-run `--resume`); scoped to `projects/` so the OAuth credential never crosses (default: `false`) (types: `true`/`false`)
+  - `persistClaudeProjects`: mount `~/.claude/projects` read-write so transcripts + memory persist back (cross-run `--resume`); scoped to `projects/` only — nothing else under `~/.claude` is writable (default: `false`) (types: `true`/`false`)
   - `egressAllowlist`: FQDN/IP/CIDR egress allowlist — empty = open egress, non-empty = default-deny firewall (default: `[]`) (types: list of strings)
   - `egressPorts`: destination ports the allowlist permits (default: `[ 443 ]`) (types: list of ports)
   - `agentSudo`: whether the in-VM agent gets passwordless root (sudo); `null` (default) = auto — on for DevEx and `--shell` debugging, but automatically **off** when `egressAllowlist` is set so a compromised agent can't flush the in-guest egress firewall to exfiltrate; `true`/`false` force it (default: `null`) (types: `null`, or `true`/`false`)
@@ -230,6 +240,7 @@
       vmDiskSize = 32;
       nix.enable = true;
       egressAllowlist = [
+        "cache.nixos.org"
         "github.com"
         "api.github.com"
         "raw.githubusercontent.com"

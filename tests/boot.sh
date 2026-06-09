@@ -156,6 +156,26 @@ grep -qa 'WRITE:ok' <<<"$OUT" &&
   no "overlay mode: host file LEAKED — isolation broken"
 rm -rf "$PROJ_RO"
 
+# ---- shareClaudeConfig: settings cross, the OAuth credential never does -----
+# shareClaudeConfig shares ~/.claude (settings, commands, memory) read-only but EXCLUDES the
+# OAuth credential by design — auth in the VM is /login or an API key, never the host's token.
+# Stage a fixture ~/.claude (a settings file + a credential marker), run with sharing ON, and
+# assert the guest reads settings but the credential is reachable nowhere the agent can get to
+# (the whited-out overlay path, nor the raw read-only lower under root-private /run/ccvm-priv).
+CFG_HOME="$(mktemp -d)"
+mkdir -p "$CFG_HOME/.claude"
+printf '{"theme":"dark"}\n' >"$CFG_HOME/.claude/settings.json"
+printf '{"oauth":"CCVM-CRED-MUST-NOT-CROSS"}\n' >"$CFG_HOME/.claude/.credentials.json"
+PROJ_CFG="$(mktemp -d)"
+OUT="$(HOME="$CFG_HOME" CCVM_SHARE_CLAUDE_CONFIG=1 run_capture "$WRAP" "$PROJ_CFG")"
+grep -qa '^CONFIG:settings-readable$' <<<"$OUT" &&
+  ok "shareClaudeConfig: host settings.json readable in the guest" ||
+  no "shareClaudeConfig: settings.json not readable: $(grep -a '^CONFIG:' <<<"$OUT")"
+grep -qa '^CONFIG:credential-excluded$' <<<"$OUT" &&
+  ok "shareClaudeConfig: OAuth credential excluded (not via overlay nor the raw lower)" ||
+  no "shareClaudeConfig: OAuth credential REACHABLE in the guest — the login would leak: $(grep -a '^CONFIG:' <<<"$OUT")"
+rm -rf "$PROJ_CFG" "$CFG_HOME"
+
 # ---- egress allowlist: only the allowlisted host is reachable --------------
 # Needs outbound internet. The egress wrapper allowlists example.com (api.anthropic.com is
 # auto-included); the stub probes example.com (must reach) and 1.1.1.1 (must be blocked).

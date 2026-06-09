@@ -18,7 +18,7 @@
     trustedPublicKeys = [ ]; # public keys that verify paths from `substituters`
   };
   apiKeyVariable = "ANTHROPIC_API_KEY"; # host env var carrying the key (rides SendEnv only)
-  shareClaudeConfig = true; # reuse the host ~/.claude (login/settings/memory), read-only
+  shareClaudeConfig = true; # reuse the host ~/.claude (settings/commands/memory), read-only; the OAuth login is NOT shared — auth in-VM via /login or API key
   persistClaudeProjects = false; # persist ~/.claude/projects back to the host (resume + memory)
   shareGitConfig = true; # stage a sanitized host git config so in-VM git commits as you
   extraClaudeMd = builtins.readFile ./ccvm-context.md; # guest ~/.claude/CLAUDE.md ("you're in ccvm")

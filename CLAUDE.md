@@ -34,32 +34,58 @@ way. The VM being the boundary is what makes `--dangerously-skip-permissions` sa
 invariants below stop the *host* from being **persisted to or having its credentials written to
 disk** — they do **not** sandbox what a prompt-injected agent can **read and send**. With the
 native-mirroring defaults (open egress + `shareClaudeConfig=true`), the in-VM agent can read the
-OAuth credential (`~/.claude/.credentials.json` rides the ro 9p mount so claude can auth) and the
-whole project tree, and **exfiltrate either over open egress**. "Never copied to seed/disk"
-protects the host from *persistence*, not the agent from *reading shared inputs*. So the
-out-of-the-box win is **containment** (no host access beyond the CWD, nothing persists), **not
-exfiltration resistance** — a deliberate DevEx choice, not a bug. The primary hardening knob is
-`egressAllowlist` (default-deny egress; the API stays reachable) — but its firewall is enforced
-**inside the guest**, so it only binds an agent that isn't guest-root. Setting `egressAllowlist`
-therefore also **auto-drops the agent's sudo** (`agentSudo` auto), so a prompt-injected agent
-can't just `nft flush` the rules; the *complete* fix is host-side egress enforcement (not built
-yet — see "Egress: an allowlist, not Tor"). The strongest stance is `shareClaudeConfig=false` +
-API-key auth, so the OAuth token never enters the VM at all. Keep this distinction accurate in
-user-facing docs — under-stating it is the one thing that turns a sandbox into a liability.
+whole project tree and **exfiltrate it over open egress**. What it can NO LONGER read is the
+host's OAuth login: `shareClaudeConfig` shares settings/commands/memory but **excludes the
+credential** (see the invariant below), so claude authenticates with the user's own in-VM
+`/login` or API key — neither the host's stored token nor a stale one ever auto-crosses. (Residual:
+under the *default* posture the agent is guest-root and could re-mount the `ccvm-config` 9p device
+to read the credential off the raw share directly — closing THAT needs host-side staging, the same
+shape as the egress firewall's root-agent caveat; with `egressAllowlist` the agent isn't root and
+the exclusion is airtight.) So the out-of-the-box win is **containment** (no host access beyond the
+CWD, nothing persists) plus **the host login never auto-crossing** — **not** project-exfiltration
+resistance, a deliberate DevEx choice, not a bug. The primary hardening knob is `egressAllowlist`
+(default-deny egress; the API stays reachable) — but its firewall is enforced **inside the guest**,
+so it only binds an agent that isn't guest-root. Setting `egressAllowlist` therefore also
+**auto-drops the agent's sudo** (`agentSudo` auto), so a prompt-injected agent can't `nft flush`
+the rules (nor re-mount the config share); the *complete* fix is host-side egress enforcement (not
+built yet — see "Egress: an allowlist, not Tor"). To keep auth off the VM's OAuth path entirely,
+use `shareClaudeConfig=false` + API-key auth. Keep this distinction accurate in user-facing docs —
+under-stating it is the one thing that turns a sandbox into a liability.
 
 - **API key never touches disk/argv/kernel-cmdline.** It travels only over the SSH channel
   via `SendEnv`→`AcceptEnv`. Use `SendEnv`, **never** `SetEnv` (SetEnv puts it on the
   remote command line).
 - **Host key is pinned.** Ephemeral ed25519 keys per run, `StrictHostKeyChecking=yes`.
   Never disable host-key checking to "make it work."
-- **`shareClaudeConfig` never leaks the OAuth credential.** `~/.claude/.credentials.json`
-  must ride the **read-only 9p mount** only — never copied into the scratch/seed dir. Only
-  the non-secret `~/.claude.json` is staged through the seed. The config-deref staging loop
-  selects `find -type l` and skips `.credentials.json` by name; keep both guards. Verify by
-  running the staging loop standalone and grepping the seed dir for the credential — expect
-  zero hits. **`persistClaudeProjects` (opt-in) does not change this:** it mounts only
-  `~/.claude/projects` read-write; the credential lives at the `~/.claude` *root*, not under
-  `projects/`, so it is never in that share. Never widen the writable mount to all of `~/.claude`.
+- **`shareClaudeConfig` excludes the OAuth credential (config only, never the login).**
+  `shareClaudeConfig` shares settings/commands/memory, NOT the host's login — the credential
+  must reach neither the seed NOR the in-guest config view, so claude starts unauthenticated and
+  the user's own `/login` or API key authenticates it (ephemerally). Three guards, keep all of
+  them: (1) the config-deref staging loop selects `find -type l` and skips `.credentials.json` by
+  name, and (2) a defense-in-depth `find … -name .credentials.json -delete` strips any nested one
+  — so the secret never reaches the on-disk seed (verify: run the staging loop and grep the seed →
+  zero hits). (3) Guest-side, the host `~/.claude` rides the read-only 9p lower mounted under a
+  0700 **root-only** dir (`/run/ccvm-priv`, so a non-root agent can't read the raw lower), and the
+  seed-setup writes an overlay **whiteout** over `.credentials.json` so it is absent from the
+  merged `~/.claude` the agent sees (`guest/launcher.nix`). **Residual (be honest):** a guest-*root*
+  agent could re-mount the `ccvm-config` 9p device and read the credential off the raw share —
+  guest-side exclusion can't stop that, so it is airtight only when the agent is non-root, i.e.
+  whenever `egressAllowlist` is set (which auto-drops sudo). The airtight fix for the open-egress
+  posture is host-side staging (export a credential-free copy of `~/.claude`), deliberately not
+  built — same precedent as the in-guest egress firewall. This also avoids the OAuth refresh-token
+  rotation that an in-VM auth would otherwise trigger: claude refreshes on a stale token, the
+  rotated token dies with the ephemeral upper, and the host's stored (now-superseded) token is left
+  invalid — forcing a host `/login`. Excluding the credential sidesteps that entirely.
+  **`persistClaudeProjects` (opt-in) does not change this:** it mounts only `~/.claude/projects`
+  read-write; the credential lives at the `~/.claude` *root*, not under `projects/`, so it is never
+  in that share. Never widen the writable mount to all of `~/.claude`.
+- **`~/.claude.json` is staged whole — treat it as config, not a secret store.** The home-root
+  `~/.claude.json` (distinct from the `~/.claude/` dir) is copied into the seed verbatim under
+  `shareClaudeConfig`. It is normally non-secret (startup flags, project list, `userID`), but it
+  *can* carry MCP server configs with inline env/tokens. ccvm does not sanitize it, so a user who
+  keeps MCP secrets there exposes them to the in-VM agent (and the on-disk seed). If that becomes a
+  real pattern, sanitize the known secret-bearing keys here the way `shareGitConfig` strips
+  `credential.*`.
 - **`shareGitConfig` stages only sanitized, non-secret git config.** The wrapper resolves the
   **global** git config host-side and writes `seed/gitconfig` only after dropping every value
   containing `/nix/store/` (host-only tool paths that would dangle) and **all `credential.*`
@@ -184,8 +210,16 @@ reopening one needs a *new* reason, not a rediscovery of the old trade-off.
   *control* (where the agent may connect) belongs in ccvm; *anonymization* belongs on the host.
   The IP-filter MVP leaves three residual channels — each the job of a future SNI/DNS-filtering
   proxy, not the packet filter: **FQDN staleness** (the kernel sees IPs, so FQDNs are
-  host-pre-resolved at launch into pinned A/AAAA records — a CDN like `api.anthropic.com`
-  rotating mid-session breaks calls, so restart or pin a CIDR); **DNS tunneling** (DNS is pinned
+  host-pre-resolved at launch into pinned A/AAAA records. This is worse than slow mid-session
+  rotation: the *host* resolver and the *guest* resolver routinely disagree on the **first** call,
+  because round-robin hosts hand out different members of a large pool per query — verified,
+  `egressAllowlist=["github.com"]` pins the host's snapshot, the guest dials a github.com IP
+  outside it, the SYN is silently dropped and the request hangs. So FQDN allowlisting is
+  best-effort for round-robin / CDN-fronted hosts — `github.com`, sometimes npm — exactly the ones
+  people reach for first; pin a CIDR for those, e.g. GitHub publishes its ranges at
+  api.github.com/meta. `policy drop` is silent, so the symptom is a hang, not an error. The real
+  fix is resolving in the guest / pinning DNS→IP so the firewall and the agent's resolver can't
+  diverge — the same future proxy below); **DNS tunneling** (DNS is pinned
   to the slirp stub resolver, blocking DNS-to-anywhere, but low-bandwidth tunneling through the
   recursive resolver remains); **TCP-only** (QUIC/UDP 443 is dropped; clients fall back to TCP).
   And the load-bearing caveat: **enforcement lives in the guest, so it only binds a non-root agent.**

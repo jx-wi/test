@@ -125,19 +125,35 @@ let
       fi
 
       # Optional host-config path: surface the host's ~/.claude (settings, custom commands,
-      # global memory, OAuth credential) inside the VM as the read-only lower of an overlay,
-      # with a tmpfs upper for claude's own writes — so its state is usable but ephemeral and
-      # never persists back to the host. The home-root ~/.claude.json is staged via the seed
-      # (it is config, not the secret token) and installed into the writable home.
+      # global memory) inside the VM as the read-only lower of an overlay, with a tmpfs upper
+      # for claude's own writes — so its state is usable but ephemeral and never persists back
+      # to the host. The OAuth credential is deliberately EXCLUDED (see below): shareClaudeConfig
+      # shares configuration, not the login — auth in the VM is the user's own /login or API key.
+      # The home-root ~/.claude.json is staged via the seed (config, not the secret token) and
+      # installed into the writable home.
       if [ -f "$seed/share-claude-config" ]; then
-        mkdir -p /run/ccvm-host-claude
-        if mount -t 9p -o ${p9},ro ccvm-config /run/ccvm-host-claude 2>/dev/null; then
+        # Mount the host ~/.claude lower under a 0700 root-only parent. The raw 9p lower still
+        # carries .credentials.json (9p exports a whole dir; we can't drop one file from the
+        # export), so gate the lower behind a dir the agent can't traverse — the overlay below,
+        # mounted by root, still reads it because overlayfs uses the mounter's creds, not the
+        # agent's path access. (A root agent could still re-mount the ccvm-config 9p device
+        # directly; closing THAT needs host-side staging — see CLAUDE.md. With egressAllowlist
+        # the agent isn't root, so this exclusion is airtight there.)
+        install -d -m 700 -o root -g root /run/ccvm-priv
+        mkdir -p /run/ccvm-priv/host-claude
+        if mount -t 9p -o ${p9},ro ccvm-config /run/ccvm-priv/host-claude 2>/dev/null; then
           install -d -m 700 -o ccvm -g users /home/ccvm/.claude
           mkdir -p /run/ccvm-claude-upper /run/ccvm-claude-work
           chown ccvm:users /run/ccvm-claude-upper /run/ccvm-claude-work
           mount -t overlay overlay \
-            -o lowerdir=/run/ccvm-host-claude,upperdir=/run/ccvm-claude-upper,workdir=/run/ccvm-claude-work \
+            -o lowerdir=/run/ccvm-priv/host-claude,upperdir=/run/ccvm-claude-upper,workdir=/run/ccvm-claude-work \
             /home/ccvm/.claude
+          # Exclude the OAuth credential from the merged config view: removing it ON THE OVERLAY
+          # writes a whiteout into the tmpfs upper that hides the read-only lower's copy — the host
+          # file is never touched (the lower is ro 9p). claude starts unauthenticated; the user runs
+          # /login (ephemeral, in the upper) or sets an API key. This also sidesteps the OAuth
+          # refresh-token rotation that would otherwise invalidate the host's own login on next use.
+          rm -f /home/ccvm/.claude/.credentials.json 2>/dev/null || true
           # Lay the host-dereferenced config files (home-manager symlinks the wrapper
           # resolved on the host) over the overlay. They land in the writable tmpfs upper,
           # shadowing the now-dangling symlinks the 9p lower carries, so claude can actually
