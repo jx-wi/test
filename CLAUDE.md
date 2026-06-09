@@ -169,6 +169,24 @@ reopening one needs a *new* reason, not a rediscovery of the old trade-off.
   secrets in tmpfs* — by **placement**, not a second sized disk. A second disk only earns its
   keep for a different *lifecycle* (a persistent, content-addressed store cache) — a separate
   future feature with its own key story, deliberately **not** folded into `vmDiskSize`.
+- **9p for the shares, not virtiofs (and the large-tree edge case).** The workspace/seed/config/
+  projects shares ride virtio-9p — zero host daemon, unprivileged, fits the zero-setup goal. 9p
+  with `cache=none` (the default) is latency-bound on *metadata*: each `stat`/`open`/`readdir` is
+  a host round-trip, so a **cold whole-tree walk** (a fresh `rg`/`git status`/`fd` over the entire
+  tree) is sluggish, while the agent's normal localized loop (read a few files, edit, build) feels
+  native. Calibration for the realistic audience: **systemd-scale (~4k files) is a non-issue; the
+  Linux kernel (~85k files, ~1.5 GB) is the usable ceiling** — fine except the occasional cold
+  whole-tree grep; past that (giant monorepos, 100k+ tiny files) it crawls, but that isn't ccvm's
+  user. The real-world worst case is a huge gitignored dir (`node_modules`/`.venv`/`target`), and
+  that's already handled: `rg`/`fd` skip gitignored paths, and bulk build output belongs on
+  `/scratch` (`vmDiskSize`, native ext4). **virtiofs would be faster but is a deliberate non-goal
+  pre-1.0:** it needs a per-share `virtiofsd` daemon + a shared-memory guest backend (reworking the
+  core QEMU `-m` args, the cleanup trap that reaps the daemons, and the uid-remap/`security_model=none`
+  passthrough path), a multi-day change that reopens every share's security verification — for a
+  problem the audience rarely hits. The cheap lever *if* a kernel-scale user ever complains: bump
+  9p `msize` and add a **mode-aware** cache (`cache=loose`/`mmap` is fine for the ro overlay
+  lower/config/seed, but risks stale reads on the live **rw** workspace where host and guest both
+  write — keep it conservative there). Don't reach for virtiofs without that benchmark first.
 
 ## Build / test / debug
 
