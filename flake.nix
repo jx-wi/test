@@ -6,16 +6,6 @@
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
   };
 
-  # Optional but high-value before going public: a public binary cache so
-  # `nix run github:jx-wi/ccvm` pulls the prebuilt guest image instead of compiling the
-  # whole NixOS closure on first use (otherwise a newcomer's first run is a multi-minute
-  # build). Fill in your cache URL + public key and uncomment; have CI push to the same
-  # cache (e.g. cachix). Until then, first run builds locally and is cached only on that host.
-  # nixConfig = {
-  #   extra-substituters = [ "https://YOUR-CACHE.cachix.org" ];
-  #   extra-trusted-public-keys = [ "YOUR-CACHE.cachix.org-1:REPLACE_WITH_PUBLIC_KEY=" ];
-  # };
-
   outputs = { self, nixpkgs }:
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
