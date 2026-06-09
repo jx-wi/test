@@ -163,6 +163,19 @@ reopening one needs a *new* reason, not a rediscovery of the old trade-off.
   inbound SSH port. The lighter VMMs boot faster but make you wire up host networking, which
   breaks "works on a stock box as a normal user." Boot speed matters; running unprivileged
   matters more.
+- **Guest can reach the host's loopback via slirp `10.0.2.2` — know this.** slirp maps its gateway
+  `10.0.2.2` to the *host's* `127.0.0.1`. Verified: from the guest, `10.0.2.2:22` answers with the
+  **host's own sshd** (a different ed25519 host key than the guest's). So under **open egress (the
+  default) any host service bound to `127.0.0.1` is reachable from inside the VM** — local databases,
+  unauth dashboards/metrics, model servers (e.g. Ollama on 11434), cloud metadata/credential
+  proxies, a second concurrent ccvm — many of which are unauthenticated *precisely because* they
+  assume only host-local processes reach them. It is **network reach only, not a host-write path**
+  (the fs boundary still holds), but it widens what a prompt-injected agent can talk to. An
+  `egressAllowlist` closes it (`10.0.2.2` isn't in the set, so `policy drop` blocks it) — subject to
+  the same in-guest-enforcement caveat as everything else (a root agent could `nft flush` it → hence
+  `agentSudo`). There is **no slirp knob to keep internet but drop only the host redirect**
+  (`restrict=on` kills both), so the only complete fix is the host-side namespace under "Egress"
+  below. Matters most when ccvm runs on a box with sensitive loopback-bound services.
 - **Egress: an allowlist, not Tor.** Tor solves *anonymity*, which is orthogonal — the dominant
   flow is the Anthropic API authenticated with the user's own credential, so Tor hides the
   source IP while the app layer still identifies you exactly (self-defeating), adds latency, and
