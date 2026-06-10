@@ -136,15 +136,22 @@ let
       if [ -d "$seed/claude-config" ]; then
         # Copy each staged item into ~/.claude. Dirs recurse; chown afterward (never chown -R
         # on an overlay root — copy-up hazard doesn't apply here since this is a plain tmpfs
-        # dir, but be explicit). Best-effort: a hiccup must not fail the oneshot and block sshd.
+        # dir, but be explicit). chmod u+w too (audit D-1): host config files reached the seed via
+        # `cp -aL` of home-manager's read-only /nix/store symlinks (mode 0444), so without this the
+        # in-VM settings.json stays unwritable and claude's own settings writes fail with EACCES.
+        # Best-effort: a hiccup must not fail the oneshot and block sshd.
         find "$seed/claude-config" -maxdepth 1 -mindepth 1 -print0 2>/dev/null \
           | while IFS= read -r -d "" item; do
           name="''${item##*/}"
           dst="/home/ccvm/.claude/$name"
           if [ -d "$item" ]; then
-            cp -r "$item" "$dst" 2>/dev/null && chown -R ccvm:users "$dst" 2>/dev/null || true
+            cp -r "$item" "$dst" 2>/dev/null \
+              && chown -R ccvm:users "$dst" 2>/dev/null \
+              && chmod -R u+w "$dst" 2>/dev/null || true
           else
-            cp "$item" "$dst" 2>/dev/null && chown ccvm:users "$dst" 2>/dev/null || true
+            cp "$item" "$dst" 2>/dev/null \
+              && chown ccvm:users "$dst" 2>/dev/null \
+              && chmod u+w "$dst" 2>/dev/null || true
           fi
         done || true
       fi

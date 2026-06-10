@@ -175,6 +175,14 @@ let
       (builtins.readFile ../wrapper/ccvm.sh);
   });
 in
+# Audit S-2: a few config values are baked into the wrapper as raw shell (APIKEYVAR="@APIKEYVAR@",
+# EGRESSALLOW="@EGRESSALLOW@", …). The module types keep them strings but not shell-safe, so validate
+# at eval time — a stray quote / `$(…)` would otherwise become code in the generated wrapper. Only
+# the user's own (trusted) config feeds this, so these are footgun guards, not a trust boundary.
+assert lib.assertMsg (builtins.match "[A-Za-z_][A-Za-z0-9_]*" config.apiKeyVariable != null)
+  "ccvm: apiKeyVariable must be a valid shell/env identifier ([A-Za-z_][A-Za-z0-9_]*); got '${config.apiKeyVariable}'.";
+assert lib.assertMsg (lib.all (e: builtins.match "[A-Za-z0-9._:/-]+" e != null) config.egressAllowlist)
+  "ccvm: every egressAllowlist entry must be an FQDN / IP / CIDR ([A-Za-z0-9._:/-]); got [ ${lib.concatStringsSep " " config.egressAllowlist} ].";
 {
   inherit wrapper guestSystem toplevel storeImage append kernel initrd config meta;
   kernelParams = gc.boot.kernelParams;

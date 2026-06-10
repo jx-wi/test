@@ -48,8 +48,12 @@ CWD, nothing persists) plus **the host login never auto-crossing** — **not**
 project-exfiltration resistance, a deliberate DevEx choice, not a bug. The primary hardening knob
 is `egressAllowlist` (default-deny egress; the API stays reachable) — but its firewall is enforced
 **inside the guest**, so it only binds an agent that isn't guest-root. Setting `egressAllowlist`
-therefore also **auto-drops the agent's sudo** (`agentSudo` auto), so a prompt-injected agent
-can't `nft flush` the rules; the *complete* fix is host-side egress enforcement (not built yet —
+therefore also **auto-drops the agent's sudo** (`agentSudo` auto) **and, under `nix.enable`, removes
+the agent from Nix `trusted-users`** — both are load-bearing, because a Nix trusted-user is
+root-equivalent (it can register a `post-build-hook`, which the root daemon runs **as root**) and
+would otherwise regain root and `nft flush` the rules (audit S-1; was demonstrated end-to-end, now
+fixed in `guest/default.nix`). With those two, a prompt-injected agent can't reopen egress short of a
+guest-kernel exploit; the *complete* fix is still host-side egress enforcement (not built yet —
 see "Egress: an allowlist, not Tor"). To disable all claude config sharing, set all
 `share.*` items to false or use `CCVM_SHARE_CLAUDE_CONFIG=0`. Keep this distinction accurate in
 user-facing docs — under-stating it is the one thing that turns a sandbox into a liability.
@@ -161,10 +165,28 @@ user-facing docs — under-stating it is the one thing that turns a sandbox into
 - **`agentSudo` is auto, not a fixed default.** The agent has passwordless root in the guest (DevEx,
   `--shell` debugging) EXCEPT when `egressAllowlist` is set, where it auto-drops so the in-guest
   egress firewall can't be flushed by the agent (the firewall is installed by a root systemd unit,
-  not the agent, so enforcement survives the drop). `null` = auto; `true`/`false` force it — but
-  forcing `true` *alongside* an `egressAllowlist` re-opens the `nft flush` bypass,
-  so it's only sensible behind host-side egress control. It's the in-guest half of egress containment — don't quietly flip it back to always-on without an equivalent
-  guarantee (host-side enforcement). Build-time (rebuilds the guest closure).
+  not the agent, so enforcement survives the drop). **Coupled to it (`guest/default.nix`): Nix
+  `trusted-users` is gated on the SAME flag — `[ "root" ] ++ lib.optional cfg.agentSudo "ccvm"` — so
+  when sudo is off the agent is also non-trusted. This is load-bearing under `nix.enable`: a Nix
+  trusted-user is root-equivalent (a `post-build-hook` runs as root), so leaving the agent trusted
+  would hand straight back the root the sudo-drop removes, letting it `nft flush` the firewall (audit
+  S-1). A non-trusted agent can still `nix build`/`nix develop`; builds run as the nixbld users.**
+  `null` = auto; `true`/`false` force it — but forcing `true` *alongside* an `egressAllowlist`
+  re-opens the `nft flush` bypass (and re-grants trusted-user), so it's only sensible behind
+  host-side egress control. It's the in-guest half of egress containment — don't quietly flip it back
+  to always-on without an equivalent guarantee (host-side enforcement). Build-time (rebuilds the
+  guest closure).
+- **Guest kernel/userspace hardening is deliberate, cheap, and boot-safe (`guest/default.nix`).**
+  A small in-guest defense-in-depth layer against an agent probing the kernel, none of it touching
+  the host or the boot-critical path: **`security.protectKernelImage`** (no kexec/hibernation —
+  *not* `lockKernelModules`, which would break the seed service's runtime `modprobe` of
+  nf_tables/dm_crypt); **sysctls** `kptr_restrict=2`, `dmesg_restrict=1`, `unprivileged_bpf_disabled=1`,
+  `bpf_jit_harden=2`, `rp_filter=1`; **`sudo-rs`** (memory-safe Rust sudo, `execWheelOnly`) in place
+  of classic C sudo, still gated on `agentSudo`; an **explicit `root.hashedPassword = "!"`**; and a
+  pinned **`nix.settings.allowed-users = [ "root" "ccvm" ]`**. Two things are deliberately NOT done:
+  `lockKernelModules` (incompatible with runtime modprobe, above) and disabling unprivileged user
+  namespaces (the nix build sandbox needs them, and the namespaced-root they grant can't reach the
+  init-netns firewall or route packets out — audit-verified, so it's not a containment hole).
 - **`extraClaudeMd` is default-on context, not a flag.** A built-in blurb is staged as the
   guest's `~/.claude/CLAUDE.md` (via the seed, **appended** to any host-shared one — never
   clobbering it) so the agent knows it's in ccvm. It must stay seed-delivered, never become
@@ -234,8 +256,12 @@ reopening one needs a *new* reason, not a rediscovery of the old trade-off.
   And the load-bearing caveat: **enforcement lives in the guest, so it only binds a non-root agent.**
   The nftables ruleset is installed by a root systemd unit, but a root agent in the same guest could
   `nft flush` it (verified trivially). That is why setting `egressAllowlist` auto-drops the agent's
-  sudo (`agentSudo`), raising the bar from one command to a guest-kernel exploit. The *complete* fix
-  is **host-side egress enforcement**: put the allowlist nft in a namespace the guest can't reach,
+  sudo (`agentSudo`) **and, under `nix.enable`, drops it from Nix `trusted-users`** — a trusted-user
+  is root-equivalent (a `post-build-hook` runs as root), so the audit (S-1) showed that with
+  `nix.enable` the sudo-drop alone was bypassable end-to-end (`nix build --post-build-hook` →
+  `nft delete table inet ccvm` → blocked host reachable); gating trusted-users on the same flag
+  closes it. Together they raise the bar from one command to a guest-kernel exploit. The *complete*
+  fix is **host-side egress enforcement**: put the allowlist nft in a namespace the guest can't reach,
   with a filtered uplink via an **external** `pasta`/`slirp4netns` (attached by `/proc/$PID/ns/*`).
   The uplink + filtering half is prototyped and works (allowlisted host reachable, all else dropped).
   But integrating it hit a hard **uid/caps/9p trilemma** that makes this a real design decision, not

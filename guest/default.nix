@@ -325,12 +325,42 @@ in
       extraGroups = lib.optional cfg.agentSudo "wheel";
       shell = pkgs.zsh;
     };
+    # Lock root explicitly. mutableUsers=false already leaves root password-less (→ locked), but be
+    # unambiguous: no interactive root login and no `su -`/`su root` path anywhere (verified: su to
+    # root returns an authentication failure). The privileged work runs from root systemd units, not
+    # an interactive root shell.
+    users.users.root.hashedPassword = "!";
     # Ephemeral VM: passwordless sudo is fine and helps debugging in --shell mode — but it also lets
     # a root agent flush the egress firewall, so agentSudo=false (auto when egressAllowlist is set)
-    # disables sudo outright. mkDefault so an extraGuestModule can still re-enable it if a workflow
-    # genuinely needs in-guest sudo.
-    security.sudo.enable = lib.mkDefault cfg.agentSudo;
-    security.sudo.wheelNeedsPassword = false;
+    # disables sudo outright. Use sudo-rs (the memory-safe Rust sudo) instead of classic C sudo, and
+    # restrict invocation to the wheel group (execWheelOnly). mkDefault on enable so an extraGuestModule
+    # can still re-enable it if a workflow genuinely needs in-guest sudo.
+    security.sudo.enable = false;
+    security.sudo-rs = {
+      enable = lib.mkDefault cfg.agentSudo;
+      wheelNeedsPassword = false;
+      execWheelOnly = true;
+    };
+
+    ##########################################################################
+    # Guest kernel hardening. Cheap, in-guest defense-in-depth against an agent
+    # probing the kernel — none of it touches the host or the boot-critical path.
+    ##########################################################################
+    # Block replacing the running kernel image (kexec) + hibernation. The guest never kexecs or
+    # hibernates. NB: this does NOT lock module loading, so the seed service's runtime modprobe
+    # (nf_tables/nf_conntrack for egress, dm_crypt for the standalone /scratch) still works — we
+    # deliberately do not set security.lockKernelModules, which would break those.
+    security.protectKernelImage = true;
+    # Unprivileged user namespaces stay ENABLED on purpose: the nix build sandbox needs them, and the
+    # namespaced-root they grant can neither reach the init-netns egress firewall nor route packets
+    # out (a fresh netns has no uplink) — verified during the audit. The sysctls below are pure wins.
+    boot.kernel.sysctl = {
+      "kernel.kptr_restrict" = 2; # hide kernel pointers from the agent (/proc/kallsyms etc.)
+      "kernel.dmesg_restrict" = 1; # only root reads the kernel ring buffer
+      "kernel.unprivileged_bpf_disabled" = 1; # no unprivileged BPF (the agent needs none)
+      "net.core.bpf_jit_harden" = 2; # harden the BPF JIT against spraying
+      "net.ipv4.conf.all.rp_filter" = 1; # strict reverse-path filter (anti-spoof; single-NIC NAT guest)
+    };
 
     programs.zsh = {
       enable = true;
@@ -410,7 +440,19 @@ in
     nix.enable = cfg.nix.enable;
     nix.settings = lib.mkIf cfg.nix.enable {
       experimental-features = [ "nix-command" "flakes" ]; # `nix develop`/`nix build` on flakes
-      trusted-users = [ "root" "ccvm" ]; # let the agent add substituters / build without sudo
+      # Who may talk to the nix-daemon at all (request builds). Only root and the agent are nix
+      # clients in this guest, so pin the set rather than leaving it the permissive default `*`.
+      allowed-users = [ "root" "ccvm" ];
+      # SECURITY (audit S-1) — a Nix *trusted-user* is root-EQUIVALENT: it can set post-build-hook,
+      # disable the build sandbox, or add unsigned substituters, all of which the root daemon honours
+      # (a post-build-hook runs AS ROOT). So make the agent trusted ONLY when it already has root via
+      # sudo (agentSudo on). When agentSudo is dropped (auto under egressAllowlist) the agent must NOT
+      # be trusted — otherwise it could regain root through the daemon and `nft flush` the in-guest
+      # egress firewall, silently defeating the exact mitigation the sudo-drop exists for. A
+      # NON-trusted agent can still `nix build`/`nix develop` (builds run as the nixbld users); it
+      # just can't override these trusted-only settings. The complete fix remains host-side egress
+      # enforcement (see CLAUDE.md, "Egress"); this keeps the in-guest mitigation actually binding.
+      trusted-users = [ "root" ] ++ lib.optional cfg.agentSudo "ccvm";
       # Extra binary caches (nix.substituters / nix.trustedPublicKeys). Appended to the defaults
       # (cache.nixos.org + nixpkgs' keys), reached over HTTP at network speed — a substituter is
       # HTTP substitution, not a mount, so this needs no 9p share and exposes nothing of the host.

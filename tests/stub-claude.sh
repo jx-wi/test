@@ -33,6 +33,11 @@ fi
 # share.settings stages settings.json; the credential is NEVER staged — excluded by
 # construction (it is not a share.* item). boot.sh asserts settings ARE readable, credential NOT.
 [ -r "$HOME/.claude/settings.json" ] && echo "CONFIG:settings-readable"
+# Audit D-1: settings.json reached the seed via cp -aL of a home-manager /nix/store symlink (mode
+# 0444), so the guest must restore owner-write or claude's own settings writes fail with EACCES.
+if [ -e "$HOME/.claude/settings.json" ]; then
+  [ -w "$HOME/.claude/settings.json" ] && echo "CONFIG:settings-writable" || echo "CONFIG:settings-readonly"
+fi
 if [ -r "$HOME/.claude/.credentials.json" ]; then
   echo "CONFIG:credential-readable"
 else
@@ -103,6 +108,15 @@ case "$(stat -f -c %T /nix/store 2>/dev/null)" in
   *) echo "STORE:other" ;;
 esac
 command -v nix >/dev/null 2>&1 && echo "NIX:present" || echo "NIX:absent"
+
+# Audit S-1: a Nix trusted-user is root-equivalent (it can set post-build-hook / disable the sandbox,
+# both honoured by the root daemon). When sudo is dropped (auto under egressAllowlist) the agent must
+# NOT be trusted, or it could regain root and `nft flush` the egress firewall. Report whether ccvm is
+# in the daemon's trusted-users so boot.sh can assert it's excluded under the nix+egress posture.
+if command -v nix >/dev/null 2>&1; then
+  tu="$( { nix config show 2>/dev/null || nix show-config 2>/dev/null || cat /etc/nix/nix.conf 2>/dev/null; } | sed -n 's/^[[:space:]]*trusted-users[[:space:]]*=[[:space:]]*//p' )"
+  if printf '%s' "$tu" | grep -qw ccvm; then echo "TRUSTED:agent-is-trusted"; else echo "TRUSTED:agent-not-trusted"; fi
+fi
 
 # nix.enable + vmDiskSize: the initrd should back the overlay UPPER (/nix/.rw-store) with the
 # encrypted disk instead of tmpfs. Report its fstype (ext4 = disk-backed, tmpfs = RAM/fail-open)

@@ -30,6 +30,7 @@ WRAP_PERSIST="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix
 WRAP_NIX="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix nix)/bin/ccvm"
 WRAP_NIXDISK="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix nixDisk)/bin/ccvm"
 WRAP_NIXSUBST="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix nixSubst)/bin/ccvm"
+WRAP_NIXEGRESS="$(nix build --impure --no-link --print-out-paths -f tests/boot.nix nixEgress)/bin/ccvm"
 
 # Deterministic git-config fixture so the shareGitConfig assertions don't depend on the
 # runner's real ~/.gitconfig. Point HOME here for the wrapper runs (set AFTER `nix build`, so
@@ -165,12 +166,18 @@ rm -rf "$PROJ_RO"
 CFG_HOME="$(mktemp -d)"
 mkdir -p "$CFG_HOME/.claude"
 printf '{"theme":"dark"}\n' >"$CFG_HOME/.claude/settings.json"
+# Audit D-1: simulate home-manager's read-only /nix/store symlink (mode 0444) so the staged copy is
+# unwritable unless the guest restores owner-write — that's exactly what the assertion below checks.
+chmod 0444 "$CFG_HOME/.claude/settings.json"
 printf '{"oauth":"CCVM-CRED-MUST-NOT-CROSS"}\n' >"$CFG_HOME/.claude/.credentials.json"
 PROJ_CFG="$(mktemp -d)"
 OUT="$(HOME="$CFG_HOME" CCVM_SHARE_SETTINGS=1 run_capture "$WRAP" "$PROJ_CFG")"
 grep -qa '^CONFIG:settings-readable$' <<<"$OUT" &&
   ok "share.settings: host settings.json readable in the guest" ||
   no "share.settings: settings.json not readable: $(grep -a '^CONFIG:' <<<"$OUT")"
+grep -qa '^CONFIG:settings-writable$' <<<"$OUT" &&
+  ok "share.settings: staged settings.json is owner-writable (D-1: 0444 store mode restored)" ||
+  no "share.settings: settings.json read-only in the guest — claude's settings writes would EACCES: $(grep -a '^CONFIG:' <<<"$OUT")"
 grep -qa '^CONFIG:credential-excluded$' <<<"$OUT" &&
   ok "share.settings: OAuth credential excluded (not staged — airtight by construction)" ||
   no "share.settings: OAuth credential REACHABLE in the guest — the login would leak: $(grep -a '^CONFIG:' <<<"$OUT")"
@@ -202,6 +209,27 @@ grep -qa '^SUDO:dropped$' <<<"$OUT" &&
   ok "egress-hardened: agent sudo dropped (in-guest firewall can't be flushed by the agent)" ||
   no "egress-hardened: agent still has sudo — firewall is agent-bypassable: $(grep -a '^SUDO:' <<<"$OUT")"
 rm -rf "$PROJ_EG"
+
+# ---- S-1 regression: nix.enable + egressAllowlist — agent must not be Nix-trusted ----------
+# The real hardened config (this is the user's). With nix on AND an allowlist, the agent's sudo is
+# dropped — but a Nix *trusted-user* is root-equivalent (post-build-hook / sandbox-off run as root),
+# so if ccvm stayed trusted it could regain root and `nft flush` the egress firewall, silently
+# defeating the drop. Assert: sudo dropped, ccvm NOT a trusted-user, and the firewall still enforces.
+PROJ_NE="$(mktemp -d)"
+OUT="$(run_capture "$WRAP_NIXEGRESS" "$PROJ_NE")"
+grep -qa '^SUDO:dropped$' <<<"$OUT" &&
+  ok "nix+egress: agent sudo dropped" ||
+  no "nix+egress: agent still has sudo: $(grep -a '^SUDO:' <<<"$OUT")"
+grep -qa '^TRUSTED:agent-not-trusted$' <<<"$OUT" &&
+  ok "nix+egress: agent is NOT a Nix trusted-user (can't regain root to flush the firewall) [S-1]" ||
+  no "nix+egress: agent IS a Nix trusted-user — S-1 regression (root-equivalent via the daemon): $(grep -a '^TRUSTED:' <<<"$OUT")"
+grep -qa '^EGRESS:denied:blocked$' <<<"$OUT" &&
+  ok "nix+egress: non-allowlisted host blocked (firewall holds)" ||
+  no "nix+egress: egress not enforced: $(grep -a '^EGRESS:' <<<"$OUT")"
+grep -qa '^NIX:present$' <<<"$OUT" &&
+  ok "nix+egress: nix still usable by the (non-trusted) agent" ||
+  no "nix+egress: nix not present: $(grep -a '^NIX:' <<<"$OUT")"
+rm -rf "$PROJ_NE"
 
 # ---- vmDiskSize: /scratch is a writable, dm-crypt-backed mount --------------
 # The guest LUKS-formats the attached sparse disk with a key it generates in its own RAM and

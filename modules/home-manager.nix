@@ -102,7 +102,11 @@ in
           a runtime env var, because a writable store must be set up in the initrd. The upper is
           tmpfs (RAM) by default — a large `nix develop` will exhaust guest RAM until you also set
           `vmDiskSize`, which relocates the upper onto the encrypted ephemeral disk. Everything stays
-          wipe-on-exit.
+          wipe-on-exit. Security note: enabling nix makes the agent a Nix client of the root daemon.
+          To keep that from becoming a root path, the agent is a Nix `trusted-user` ONLY while it also
+          has sudo; setting `egressAllowlist` (or `agentSudo = false`) drops both together, so a
+          non-trusted agent can still build but can't override trusted-only settings to regain root
+          and flush the egress firewall (see `agentSudo`).
         '';
       };
 
@@ -323,6 +327,10 @@ in
         - `true`: force passwordless root on even with an allowlist — you accept that the in-guest
           firewall is then agent-bypassable (only sensible behind host-side egress control).
         - `false`: force it off — the agent cannot sudo; the in-guest firewall holds.
+        Whenever the agent's sudo is off (auto under an allowlist, or forced `false`) it is ALSO
+        removed from Nix `trusted-users` — otherwise, with `nix.enable`, a trusted-user (which is
+        root-equivalent: it can run a `post-build-hook` as root) could regain root through the daemon
+        and flush the firewall, undoing the drop. So the two move together.
         Build-time (rebuilds the guest closure). This is the IN-GUEST mitigation; a determined agent
         could still attempt a guest-kernel exploit, so the complete fix for hostile egress is
         host-side enforcement outside the guest entirely.

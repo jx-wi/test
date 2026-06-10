@@ -46,4 +46,10 @@ in
     nix.substituters = [ "https://cache.example.invalid" ];
     nix.trustedPublicKeys = [ "cache.example.invalid:0000000000000000000000000000000000000000000=" ];
   };
+  # Audit S-1 regression: nix.enable + egressAllowlist together (the real hardened config). With both,
+  # the agent's sudo is dropped (agentSudo auto) AND it must NOT be a Nix trusted-user — otherwise it
+  # could regain root via the daemon (post-build-hook) and `nft flush` the egress firewall, defeating
+  # the drop. The stub reports TRUSTED:agent-not-trusted and the egress probes still show the firewall
+  # holding. example.com is allowlisted; api.anthropic.com is auto-included.
+  nixEgress = mk { nix.enable = true; egressAllowlist = [ "example.com" ]; };
 }
