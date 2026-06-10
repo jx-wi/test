@@ -440,3 +440,14 @@ reopening one needs a *new* reason, not a rediscovery of the old trade-off.
   QEMU's virtio-9p caps the *effective* value (≈`512000` in practice — `grep msize /proc/mounts`).
   Harmless (the request is clamped, not rejected), but don't trust the requested number when
   reasoning about 9p throughput, and don't bother raising it past what QEMU will grant.
+- **`vmDiskSize` adds ~4–5s to boot — the encrypted disk's device-settle + per-boot `luksFormat`.**
+  Measured baselines under KVM (8 vCPU / 8 GiB), so you don't rediscover them: a full boot is
+  ~7.3s (≈277ms kernel + 3.9s initrd + 3.1s userspace), and `systemd-analyze blame`'s top units are
+  the `vdb` / `virtio-ccvm-scratch` device settling at ~4.6s — the undeclared scratch disk waiting on
+  `udevadm settle` plus the initrd LUKS-format. The pure-RAM default (`vmDiskSize=0`) boots faster;
+  this cost is **inherent to the wipe-on-exit guarantee** (a fresh `luksFormat` every boot, by
+  design — see "Encrypted disk, not a plain ephemeral one"), not a regression, so don't chase it
+  without first confirming the disk is the cause. Other measured references: **warm 9p is a
+  non-issue** (a 768-file repo walk ≈70ms, `git status` ≈100ms — the cold whole-tree caveat still
+  stands for kernel-scale trees), and a **running session sits around ~0.7–0.8 GiB RAM** because the
+  squashfs store and the writable-store overlay upper live on the (encrypted) disk, not in RAM.
