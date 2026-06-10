@@ -60,6 +60,22 @@ else
   ok "auto-include ran offline without error (only verbatim CIDR present)"
 fi
 
+# Name->IP pin map (egress-hosts): the guest pins these into /etc/hosts so its resolver returns
+# the same IPs the firewall allows. CIDRs/bare IPs have no name and must not appear. Offline it is
+# empty (nothing resolves); with DNS it carries the auto-included api.anthropic.com pin.
+if grep -q '10.0.0.0/8' "$SEED/egress-hosts" 2>/dev/null; then
+  no "a CIDR leaked into the name->IP pin map (egress-hosts must hold only FQDN pins)"
+else
+  ok "egress-hosts holds no CIDRs (only FQDN pins)"
+fi
+if [[ -n "$(getent ahosts api.anthropic.com 2>/dev/null)" ]]; then
+  grep -q 'api\.anthropic\.com$' "$SEED/egress-hosts" 2>/dev/null &&
+    ok "egress-hosts pins the auto-included api.anthropic.com (name->IP)" ||
+    no "egress-hosts missing the api.anthropic.com pin despite working DNS"
+else
+  ok "skipped egress-hosts FQDN-pin check (offline; nothing resolves)"
+fi
+
 [[ "$(cat "$SEED/egress-ports")" == "80,443" ]] && ok "ports staged as nft comma list" ||
   no "egress-ports wrong: $(cat "$SEED/egress-ports")"
 

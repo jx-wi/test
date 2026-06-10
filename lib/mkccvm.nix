@@ -20,14 +20,16 @@ let
 in
 userConfig:
 let
-  # Shallow-merge the top level, then deep-merge the one nested attr (`nix`) so a caller passing
-  # `nix = { enable = true; }` keeps the other `nix.*` defaults instead of replacing the whole attr.
+  # Shallow-merge the top level, then deep-merge the nested attrs (`nix`, `share`) so a caller
+  # passing `nix = { enable = true; }` or `share = { plugins = true; }` keeps the other defaults
+  # instead of replacing the whole attr.
   # NB: deliberately NOT lib.recursiveUpdate — it recurses into *any* two attrsets, and `package`
   # defaults to a derivation (which IS an attrset), so recursiveUpdate would silently deep-merge two
-  # derivations into a broken Frankenstein. A targeted one-level merge of `nix` (whose children are
-  # all scalars) is both safe and exactly what's needed.
+  # derivations into a broken Frankenstein. A targeted one-level merge of `nix` and `share` (whose
+  # children are all scalars) is both safe and exactly what's needed.
   config = (defaults // userConfig) // {
     nix = defaults.nix // (userConfig.nix or { });
+    share = defaults.share // (userConfig.share or { });
   };
 
   # agentSudo resolution. null (the default) = AUTO: keep passwordless root in the guest for DevEx,
@@ -112,7 +114,7 @@ let
     (pkgs.writeShellApplication {
     name = "ccvm";
     inherit meta;
-    runtimeInputs = with pkgs; [ qemu coreutils openssh findutils getent git ];
+    runtimeInputs = with pkgs; [ qemu coreutils openssh findutils getent git jq ];
     text = builtins.replaceStrings
       [
         "@KERNEL@"
@@ -123,7 +125,13 @@ let
         "@CORES@"
         "@MODE@"
         "@APIKEYVAR@"
-        "@SHARECLAUDE@"
+        "@SHARE_SETTINGS@"
+        "@SHARE_CLAUDEMD@"
+        "@SHARE_COMMANDS@"
+        "@SHARE_AGENTS@"
+        "@SHARE_SKILLS@"
+        "@SHARE_PLUGINS@"
+        "@SHARE_CONFIG@"
         "@PERSISTPROJECTS@"
         "@SHAREGIT@"
         "@CLAUDEMD@"
@@ -145,9 +153,15 @@ let
         (toString config.cores)
         (if config.writableCwd then "rw" else "overlay")
         config.apiKeyVariable
-        (if config.shareClaudeConfig then "1" else "0")
+        (if config.share.settings then "1" else "0")
+        (if config.share.claudeMd then "1" else "0")
+        (if config.share.commands then "1" else "0")
+        (if config.share.agents then "1" else "0")
+        (if config.share.skills then "1" else "0")
+        (if config.share.plugins then "1" else "0")
+        (if config.share.config then "1" else "0")
         (if config.persistClaudeProjects then "1" else "0")
-        (if config.shareGitConfig then "1" else "0")
+        (if config.share.gitConfig then "1" else "0")
         claudeMdFile
         qemuBin
         defaultMachine

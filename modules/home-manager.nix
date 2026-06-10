@@ -13,7 +13,7 @@ let
   ccvmPkg = (mkCcvm {
     inherit (cfg)
       package writableCwd memory cores acceleration extraPackages
-      apiKeyVariable shareClaudeConfig persistClaudeProjects shareGitConfig extraClaudeMd
+      apiKeyVariable share persistClaudeProjects extraClaudeMd
       agentSudo lockGuestMemory vmDiskSize egressAllowlist egressPorts extraGuestModules
       # programs.ccvm.nix.{enable,substituters,trustedPublicKeys} passes straight through — the
       # internal config and the guest use the SAME nested `nix` name (no nixInVm mapping anymore).
@@ -21,6 +21,14 @@ let
   }).wrapper;
 in
 {
+  imports = [
+    # shareGitConfig was a top-level option; it is now programs.ccvm.share.gitConfig.
+    # This rename keeps existing configs working with a deprecation warning.
+    (lib.mkRenamedOptionModule
+      [ "programs" "ccvm" "shareGitConfig" ]
+      [ "programs" "ccvm" "share" "gitConfig" ])
+  ];
+
   options.programs.ccvm = {
     enable = lib.mkEnableOption "ccvm — ephemeral microVM wrapper for Claude Code";
 
@@ -135,20 +143,114 @@ in
       description = "Name of the host env var carrying the Anthropic API key. Passed to the VM only over the encrypted SSH channel (SendEnv); never written to disk or argv.";
     };
 
+    # Granular allowlist controlling which parts of ~/.claude cross into the VM.
+    # Replaces the old all-or-nothing shareClaudeConfig. Everything NOT listed here
+    # (projects/, sessions/, history.jsonl, .credentials.json, …) NEVER crosses.
+    share = {
+      gitConfig = lib.mkOption {
+        type = lib.types.bool;
+        default = defaults.share.gitConfig;
+        description = ''
+          true (default): stage a SANITIZED copy of your global git config into the VM (laid at
+          ~/.config/git/config) so in-VM `git` commits as you, with your aliases and global
+          ignores — like native `claude`. "Sanitized" means host-only settings that would dangle
+          or leak are dropped: any value pointing into /nix/store (home-manager's editor / pager /
+          delta / gh credential-helper paths), all credential.* helpers (no host credentials cross
+          the boundary — ~/.ssh and gh tokens are never shared), and signing is force-disabled
+          (the signing key is deliberately not carried, so a leftover commit.gpgsign would only
+          break commits). The global core.excludesfile is staged by content to the VM's default
+          ignore path. Commits work as you; pushing to an SSH remote still needs credentials the
+          VM does not have (by design). false: stage nothing. Per-run: CCVM_SHARE_GIT_CONFIG=0|1.
+          (Renamed from programs.ccvm.shareGitConfig — existing configs are migrated automatically.)
+        '';
+      };
+
+      settings = lib.mkOption {
+        type = lib.types.bool;
+        default = defaults.share.settings;
+        description = ''
+          true (default): copy the host's ~/.claude/settings.json and ~/.claude/settings.local.json
+          into the VM so it starts with your theme, model, and other preferences. home-manager
+          symlinks are dereferenced. The copy is staged into the seed (a tmpfs ~/.claude in the
+          guest), so any in-VM writes stay ephemeral — they never reach the host. Also gates
+          ~/.claude.json staging (the home-root startup config): its known secret-bearing keys
+          (mcpServers[].env, mcpServers[].headers, primaryApiKey) are stripped before staging.
+          false: share no settings. Per-run: CCVM_SHARE_SETTINGS=0|1.
+        '';
+      };
+
+      claudeMd = lib.mkOption {
+        type = lib.types.bool;
+        default = defaults.share.claudeMd;
+        description = ''
+          true (default): copy the host's ~/.claude/CLAUDE.md (your global memory / instruction
+          file) into the VM. The ccvm-context blurb (extraClaudeMd) is APPENDED to it so the
+          agent knows it is inside a ccvm VM — the host file is never modified. false: the guest
+          sees only the ccvm-context blurb. Per-run: CCVM_SHARE_CLAUDEMD=0|1.
+        '';
+      };
+
+      commands = lib.mkOption {
+        type = lib.types.bool;
+        default = defaults.share.commands;
+        description = ''
+          true (default): copy the host's ~/.claude/commands/ directory into the VM so your
+          custom slash commands are available. false: no custom commands. Per-run: CCVM_SHARE_COMMANDS=0|1.
+        '';
+      };
+
+      agents = lib.mkOption {
+        type = lib.types.bool;
+        default = defaults.share.agents;
+        description = ''
+          true (default): copy the host's ~/.claude/agents/ directory into the VM so your
+          custom sub-agents are available. false: no custom agents. Per-run: CCVM_SHARE_AGENTS=0|1.
+        '';
+      };
+
+      skills = lib.mkOption {
+        type = lib.types.bool;
+        default = defaults.share.skills;
+        description = ''
+          true (default): copy the host's ~/.claude/skills/ directory into the VM so your
+          custom skills are available. false: no custom skills. Per-run: CCVM_SHARE_SKILLS=0|1.
+        '';
+      };
+
+      plugins = lib.mkOption {
+        type = lib.types.bool;
+        default = defaults.share.plugins;
+        description = ''
+          false (default): do NOT copy the host's ~/.claude/plugins/ into the VM. Plugins can
+          carry executable code and network credentials, so they are off by default. Set true to
+          share them; they still run in the ephemeral guest and cannot reach the host filesystem.
+          Per-run: CCVM_SHARE_PLUGINS=0|1.
+        '';
+      };
+
+      config = lib.mkOption {
+        type = lib.types.bool;
+        default = defaults.share.config;
+        description = ''
+          false (default): do NOT copy the host's ~/.claude/config/ directory into the VM. Set
+          true to share it. Per-run: CCVM_SHARE_CONFIG=0|1.
+        '';
+      };
+    };
+
+    # Deprecated: use programs.ccvm.share.{settings,claudeMd,commands,agents,skills} instead.
+    # Setting this emits a warning; the value is otherwise ignored (individual share.* options
+    # control what crosses). Runtime env var back-compat: CCVM_SHARE_CLAUDE_CONFIG=0/1 still
+    # works in the wrapper and toggles all claude items together.
     shareClaudeConfig = lib.mkOption {
-      type = lib.types.bool;
-      default = defaults.shareClaudeConfig;
+      type = lib.types.nullOr lib.types.bool;
+      default = null;
+      visible = false;
       description = ''
-        true (default): read-only mount the host's ~/.claude config into the VM (and copy
-        ~/.claude.json), so it reuses your settings, custom commands and global memory — like
-        native `claude`. home-manager symlinks (e.g. settings.json -> /nix/store/…) are
-        dereferenced so they resolve inside the VM. Claude's writes go to an ephemeral overlay
-        and do not persist back to the host. It does NOT share your login: the OAuth credential
-        is excluded (kept out of the seed and hidden from the config view in the guest), so the
-        VM authenticates with your own `/login` (web/OAuth, ephemeral) or an API key — never the
-        host's stored token. This avoids the in-VM token refresh that would otherwise rotate and
-        invalidate your host login. false: share nothing from ~/.claude (more isolated). Per-run
-        override: `CCVM_SHARE_CLAUDE_CONFIG=0|1`.
+        DEPRECATED. Use programs.ccvm.share.{settings,claudeMd,commands,agents,skills} instead.
+        The old all-or-nothing shareClaudeConfig has been replaced by a per-item allowlist; set
+        individual share.* options. The runtime env var CCVM_SHARE_CLAUDE_CONFIG=0|1 still works
+        as a back-compat toggle for all claude items.
       '';
     };
 
@@ -157,31 +259,14 @@ in
       default = defaults.persistClaudeProjects;
       description = ''
         false (default): Claude's writes to ~/.claude/projects inside the VM — per-project
-        SESSION TRANSCRIPTS and MEMORY — land in the ephemeral config overlay and vanish on
+        SESSION TRANSCRIPTS and MEMORY — land in the ephemeral tmpfs ~/.claude and vanish on
         exit, so a session started in ccvm cannot be `claude --resume`d in a later run ("ID not
         found") and memories do not survive. true: mount the host's ~/.claude/projects into the
         VM read-WRITE so those writes persist back to the host, making cross-run resume and
         memory work like native `claude`. Deliberately scoped to projects/ ONLY — the OAuth
-        credential (~/.claude/.credentials.json) is not under projects/, so it is still never
-        written back to the host. Requires shareClaudeConfig in spirit (it is the host ~/.claude
-        being shared); works independently too. Per-run override: CCVM_PERSIST_PROJECTS=0|1.
-      '';
-    };
-
-    shareGitConfig = lib.mkOption {
-      type = lib.types.bool;
-      default = defaults.shareGitConfig;
-      description = ''
-        true (default): stage a SANITIZED copy of your global git config into the VM (laid at
-        ~/.config/git/config) so in-VM `git` commits as you, with your aliases and global
-        ignores — like native `claude`. "Sanitized" means host-only settings that would dangle
-        or leak are dropped: any value pointing into /nix/store (home-manager's editor / pager /
-        delta / gh credential-helper paths), all credential.* helpers (no host credentials cross
-        the boundary — ~/.ssh and gh tokens are never shared), and signing is force-disabled
-        (the signing key is deliberately not carried, so a leftover commit.gpgsign would only
-        break commits). The global core.excludesfile is staged by content to the VM's default
-        ignore path. Commits work as you; pushing to an SSH remote still needs credentials the
-        VM does not have (by design). false: stage nothing. Per-run: CCVM_SHARE_GIT_CONFIG=0|1.
+        credential (~/.claude/.credentials.json, at the ~/.claude ROOT, not under projects/) is
+        never staged and never in this share, so it is still never written back to the host.
+        Per-run override: CCVM_PERSIST_PROJECTS=0|1.
       '';
     };
 
@@ -193,9 +278,9 @@ in
         Markdown staged as the guest's ~/.claude/CLAUDE.md (global memory) so the agent knows
         it is running inside ccvm — ephemeral, sandboxed, only the project directory shared —
         and adapts (it can be more autonomous; commits work but `git push` to an SSH remote
-        does not). It is staged through the read-only seed and laid over the config overlay,
+        does not). It is staged through the read-only seed and laid into the tmpfs ~/.claude,
         NOT passed as a claude flag, so ccvm's transparent-passthrough invariant holds. When
-        shareClaudeConfig brings a host ~/.claude/CLAUDE.md, this is APPENDED to it (the host
+        share.claudeMd brings a host ~/.claude/CLAUDE.md, this is APPENDED to it (the host
         file is never modified). The wrapper also prepends a runtime-accurate note about the
         current file-sharing mode (rw = edits are live on the host; overlay = edits are
         discarded on exit). Defaults to a sensible built-in blurb; set to "" to inject nothing,
@@ -266,11 +351,12 @@ in
         A non-empty list switches the guest to a DEFAULT-DENY egress firewall that permits only
         these destinations on `egressPorts`, plus DNS — closing the prompt-injection
         exfiltration channel. Entries may be FQDNs, bare IPs, or CIDRs. `api.anthropic.com` is
-        always auto-included so auth never breaks. CAVEAT: FQDNs are resolved on the host at
-        launch and pinned as fixed IP rules, so a round-robin / CDN-fronted host (e.g.
-        `github.com`, sometimes npm) whose live IPs differ from that launch-time snapshot is
-        silently dropped — the request just hangs. For those, allow a CIDR instead (e.g. GitHub
-        publishes its ranges at api.github.com/meta). See CLAUDE.md, "Egress".
+        always auto-included so auth never breaks. FQDNs are resolved on the host at launch and
+        pinned BOTH in the firewall and in the guest's /etc/hosts, so the in-VM resolver returns
+        exactly those IPs — round-robin / CDN hosts like `github.com` work for the session. The pin
+        is session-static, so a host that rotates ALL its IPs away mid-session can drop out;
+        restart, or use a CIDR for hosts that churn hard (e.g. GitHub's ranges at
+        api.github.com/meta). See CLAUDE.md, "Egress".
       '';
     };
 
@@ -289,5 +375,7 @@ in
 
   config = lib.mkIf cfg.enable {
     home.packages = [ ccvmPkg ];
+    warnings = lib.optional (cfg.shareClaudeConfig != null)
+      "programs.ccvm.shareClaudeConfig is deprecated — use programs.ccvm.share.{settings,claudeMd,commands,agents,skills} instead. The per-item share.* options default to the same sensible values. The runtime env var CCVM_SHARE_CLAUDE_CONFIG=0|1 still works as a back-compat toggle for all claude items.";
   };
 }

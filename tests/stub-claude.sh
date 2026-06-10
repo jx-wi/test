@@ -29,12 +29,11 @@ if echo "guest-wrote-$$" >./ccvm-boot-write 2>/dev/null; then
 else
   echo "WRITE:denied"
 fi
-# Report host-config visibility (only present when shareClaudeConfig is on and the host has it).
-# shareClaudeConfig shares settings but must EXCLUDE the OAuth credential: it must be reachable
-# neither via the overlay (~/.claude, where it's whited out) nor via the raw read-only lower
-# (mounted under root-private /run/ccvm-priv). boot.sh asserts settings ARE readable, credential NOT.
+# Report host-config visibility (share.* items land in a tmpfs ~/.claude from the seed).
+# share.settings stages settings.json; the credential is NEVER staged — excluded by
+# construction (it is not a share.* item). boot.sh asserts settings ARE readable, credential NOT.
 [ -r "$HOME/.claude/settings.json" ] && echo "CONFIG:settings-readable"
-if [ -r "$HOME/.claude/.credentials.json" ] || [ -r /run/ccvm-priv/host-claude/.credentials.json ]; then
+if [ -r "$HOME/.claude/.credentials.json" ]; then
   echo "CONFIG:credential-readable"
 else
   echo "CONFIG:credential-excluded"
@@ -136,6 +135,16 @@ if grep -q 'cache.example.invalid:0000000000000000000000000000000000000000000=' 
   echo "SUBST:key-configured"
 else
   echo "SUBST:key-missing"
+fi
+
+# egress /etc/hosts pin: allowlisted FQDNs are pinned to the host-resolved IP so the in-VM
+# resolver returns an IP the firewall allows (otherwise a round-robin host drifts to an IP the
+# firewall drops). Report whether the example.com pin landed — boot.sh asserts it in the egress
+# scenario; it's absent under open egress, where /etc/hosts is left untouched.
+if grep -qiE '(^|[[:space:]])example\.com([[:space:]]|$)' /etc/hosts 2>/dev/null; then
+  echo "HOSTS:pinned"
+else
+  echo "HOSTS:unpinned"
 fi
 
 # Egress probes (best-effort, short timeout). With open egress both reach; with the

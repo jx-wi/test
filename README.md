@@ -61,8 +61,9 @@
   `claude`):
 
   - The VM can reach the internet freely, so a misbehaving or prompt-injected agent could, in
-    principle, send your project files somewhere they shouldn't. Locking that down is one
-    setting — restrict where the VM is allowed to connect:
+    principle, send your project files (and any credential from a `/login` you did inside the VM)
+    somewhere they shouldn't. Locking that down is one setting — restrict where the VM is allowed
+    to connect:
 
     ```nix
     programs.ccvm.egressAllowlist = [ "github.com" "registry.npmjs.org" ];
@@ -70,17 +71,24 @@
     ```
 
     > [!NOTE]
-    > Allowlisted FQDNs are pinned to their IPs at launch, so a round-robin host like
-    > `github.com` can end up dropped — the request just hangs — when its live IPs drift from
-    > that snapshot. Allow a CIDR for those; GitHub lists its ranges at `api.github.com/meta`.
+    > Allowlisted FQDNs are pinned at launch to the IPs they resolve to — in the firewall and in
+    > the VM's resolver — so round-robin hosts like `github.com` work for the session. If a host
+    > rotates all its IPs mid-session it can drop out; restart, or allow a CIDR (GitHub lists its
+    > ranges at `api.github.com/meta`).
 
-  - The VM does **not** reuse your Claude login. `shareClaudeConfig` brings your settings,
-    commands and memory across, but never the credential — so you `/login` inside the VM (it
-    stays there and is wiped on exit) or set `ANTHROPIC_API_KEY`. To share nothing from
-    `~/.claude` at all:
+    > [!NOTE]
+    > *Building* ccvm itself (or anything whose Nix closure includes `claude-code`) from **inside**
+    > an allowlisted VM also needs `storage.googleapis.com` on the list — that's where the unfree
+    > `claude-code` binary is downloaded from. Just *running* ccvm doesn't need it.
+
+  - The VM shares your settings, commands, agents, and memory by default — but **never** your
+    login credential (excluded by design, not by filter). You `/login` inside the VM (it
+    stays there and is wiped on exit) or set `ANTHROPIC_API_KEY`. The `share.*` options let
+    you control exactly which `~/.claude` items cross; turn any off individually:
 
     ```nix
-    programs.ccvm.shareClaudeConfig = false;
+    programs.ccvm.share.commands = false;  # don't share custom commands
+    programs.ccvm.share.claudeMd = false;  # don't share CLAUDE.md context
     ```
 
   The full threat model and design rationale live in [CLAUDE.md](CLAUDE.md).
@@ -101,7 +109,8 @@
 
   - `enable`: install the `ccvm` command (default: `false`) (types: `true`/`false`)
   - `writableCwd`: mount the host CWD (the project dir `ccvm` was launched in) read-write so the agent's edits land on the host live; `false` keeps the CWD read-only with edits in an ephemeral overlay discarded on exit. Only this one directory ever crosses to the host (default: `true`) (types: `true`/`false`)
-  - `shareClaudeConfig`: read-only mount the host `~/.claude` so the VM reuses your settings, commands and memory — not your login (the OAuth credential is excluded; you `/login` in-VM or use an API key) (default: `true`) (types: `true`/`false`)
+  - `share.settings` / `share.claudeMd` / `share.commands` / `share.agents` / `share.skills`: stage the named item from host `~/.claude` into the VM — your settings, context file, commands, agents, and skills, but **never** your login credential (excluded by design) (default: `true` for all five) (types: `true`/`false`)
+  - `share.plugins` / `share.config`: opt-in sharing for `~/.claude/plugins` and `~/.claude/config` (default: `false` for both) (types: `true`/`false`)
   - `memory`: how much RAM in MiB to allocate to the VM (default: `4096`) (types: positive integers)
   - `cores`: how many vCPUs to allocate to the VM (default: `4`) (types: positive integers)
   - `acceleration`: which acceleration type to use (default: `"auto"`) (types: `"auto"`, `"kvm"`, or `"tcg"`)
@@ -109,7 +118,7 @@
   - `nix.enable`: enable Nix in the VM (default: `false`) (types: `true`/`false`)
   - `nix.substituters`: extra binary caches for in-VM Nix (default: `[]`) (types: list of strings)
   - `nix.trustedPublicKeys`: public keys that verify paths from `nix.substituters` (default: `[]`) (types: list of strings)
-  - `shareGitConfig`: stage a sanitized copy of your global git config so in-VM `git` commits as you (no credentials/signing keys cross) (default: `true`) (types: `true`/`false`)
+  - `share.gitConfig`: stage a sanitized copy of your global git config so in-VM `git` commits as you (no credentials/signing keys cross) (default: `true`) (types: `true`/`false`)
   - `persistClaudeProjects`: mount `~/.claude/projects` read-write so transcripts + memory persist back (cross-run `--resume`); scoped to `projects/` only — nothing else under `~/.claude` is writable (default: `false`) (types: `true`/`false`)
   - `egressAllowlist`: FQDN/IP/CIDR egress allowlist — empty = open egress, non-empty = default-deny firewall (default: `[]`) (types: list of strings)
   - `egressPorts`: destination ports the allowlist permits (default: `[ 443 ]`) (types: list of ports)
@@ -128,9 +137,10 @@
   - `CCVM_WRITABLE_CWD` == `writableCwd`
   - `CCVM_ACCEL` == `acceleration`
   - `CCVM_MEMORY` == `memory`
-  - `CCVM_SHARE_CLAUDE_CONFIG` == `shareClaudeConfig`
+  - `CCVM_SHARE_SETTINGS` == `share.settings` (likewise `CCVM_SHARE_CLAUDEMD`, `CCVM_SHARE_COMMANDS`, `CCVM_SHARE_AGENTS`, `CCVM_SHARE_SKILLS`, `CCVM_SHARE_PLUGINS`, `CCVM_SHARE_CONFIG`)
+  - `CCVM_SHARE_CLAUDE_CONFIG` == back-compat: `0` or `1` toggles all claude `share.*` items at once; per-item vars win
+  - `CCVM_SHARE_GIT_CONFIG` == `share.gitConfig`
   - `CCVM_PERSIST_PROJECTS` == `persistClaudeProjects`
-  - `CCVM_SHARE_GIT_CONFIG` == `shareGitConfig`
   - `CCVM_CLAUDE_MD` == `extraClaudeMd`
   - `CCVM_MLOCK` == `lockGuestMemory`
   - `CCVM_VM_DISK_SIZE` == `vmDiskSize`

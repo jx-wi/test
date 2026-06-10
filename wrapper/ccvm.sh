@@ -19,7 +19,13 @@ APPEND="@APPEND@"
 MEMORY="@MEMORY@"
 CORES="@CORES@"
 APIKEYVAR="@APIKEYVAR@"
-SHARECLAUDE="@SHARECLAUDE@"
+SHARE_SETTINGS="@SHARE_SETTINGS@"   # 1 = stage ~/.claude/settings.json + settings.local.json; 0 = off
+SHARE_CLAUDEMD="@SHARE_CLAUDEMD@"   # 1 = stage ~/.claude/CLAUDE.md (global memory); 0 = off
+SHARE_COMMANDS="@SHARE_COMMANDS@"   # 1 = stage ~/.claude/commands/; 0 = off
+SHARE_AGENTS="@SHARE_AGENTS@"       # 1 = stage ~/.claude/agents/; 0 = off
+SHARE_SKILLS="@SHARE_SKILLS@"       # 1 = stage ~/.claude/skills/; 0 = off
+SHARE_PLUGINS="@SHARE_PLUGINS@"     # 1 = stage ~/.claude/plugins/ (off by default); 0 = off
+SHARE_CONFIG="@SHARE_CONFIG@"       # 1 = stage ~/.claude/config/ (off by default); 0 = off
 PERSISTPROJECTS="@PERSISTPROJECTS@" # 1 = mount host ~/.claude/projects rw (resume + memory persist); 0 = off
 SHAREGIT="@SHAREGIT@" # 1 = stage a sanitized host git config into the guest; 0 = off
 CLAUDEMD="@CLAUDEMD@" # path to the baked ccvm-context CLAUDE.md (empty = inject nothing)
@@ -58,17 +64,24 @@ ccvm flags:
 
 Per-run environment overrides (a CCVM_* var overrides the baked default; an explicit
 flag wins over the env var):
-  CCVM_SHELL=1                 same as --shell
-  CCVM_DEBUG=1                 same as --ccvm-debug
-  CCVM_WRITABLE_CWD=0|1        host CWD writable (rw) or read-only (overlay)
-  CCVM_SHARE_CLAUDE_CONFIG=0|1 reuse the host ~/.claude (login, settings, memory)
-  CCVM_PERSIST_PROJECTS=0|1    persist ~/.claude/projects (resume + memory) to the host
-  CCVM_SHARE_GIT_CONFIG=0|1    stage a sanitized host git config into the guest
-  CCVM_CLAUDE_MD=<file>        alternate ccvm-context CLAUDE.md (empty disables it)
-  CCVM_MLOCK=0|1               lock guest RAM so it can't reach host swap
-  CCVM_MEMORY=<MiB>            guest RAM for this run
-  CCVM_ACCEL=auto|kvm|tcg      override the acceleration mode for this run
-  CCVM_MACHINE=<type>          QEMU machine type (default microvm on x86_64)
+  CCVM_SHELL=1                  same as --shell
+  CCVM_DEBUG=1                  same as --ccvm-debug
+  CCVM_WRITABLE_CWD=0|1         host CWD writable (rw) or read-only (overlay)
+  CCVM_SHARE_SETTINGS=0|1       stage ~/.claude/settings.json + settings.local.json
+  CCVM_SHARE_CLAUDEMD=0|1       stage ~/.claude/CLAUDE.md (global memory)
+  CCVM_SHARE_COMMANDS=0|1       stage ~/.claude/commands/
+  CCVM_SHARE_AGENTS=0|1         stage ~/.claude/agents/
+  CCVM_SHARE_SKILLS=0|1         stage ~/.claude/skills/
+  CCVM_SHARE_PLUGINS=0|1        stage ~/.claude/plugins/ (off by default)
+  CCVM_SHARE_CONFIG=0|1         stage ~/.claude/config/ (off by default)
+  CCVM_SHARE_CLAUDE_CONFIG=0|1  deprecated: toggle all claude items at once (use per-item vars)
+  CCVM_PERSIST_PROJECTS=0|1     persist ~/.claude/projects (resume + memory) to the host
+  CCVM_SHARE_GIT_CONFIG=0|1     stage a sanitized host git config into the guest
+  CCVM_CLAUDE_MD=<file>         alternate ccvm-context CLAUDE.md (empty disables it)
+  CCVM_MLOCK=0|1                lock guest RAM so it can't reach host swap
+  CCVM_MEMORY=<MiB>             guest RAM for this run
+  CCVM_ACCEL=auto|kvm|tcg       override the acceleration mode for this run
+  CCVM_MACHINE=<type>           QEMU machine type (default microvm on x86_64)
 
 See the README for the full option reference (and CLAUDE.md for the threat model).
 EOF
@@ -253,13 +266,25 @@ case "${CCVM_WRITABLE_CWD:-}" in
 esac
 [[ -n $MODE_OVERRIDE ]] && MODE="$MODE_OVERRIDE"
 
-# Host-config sharing precedence: CCVM_SHARE_CLAUDE_CONFIG overrides the baked default
-# (shareClaudeConfig, now true by default). Lets `CCVM_SHARE_CLAUDE_CONFIG=0 ccvm` opt out — or
-# `=1` opt back in — on any invocation, without rebuilding the package.
+# Back-compat: CCVM_SHARE_CLAUDE_CONFIG=0|1 toggles ALL claude items together (the old
+# shareClaudeConfig knob). Per-item CCVM_SHARE_<ITEM> overrides below take precedence.
 case "${CCVM_SHARE_CLAUDE_CONFIG:-}" in
-  1 | true | yes) SHARECLAUDE=1 ;;
-  0 | false | no) SHARECLAUDE=0 ;;
+  1 | true | yes)
+    SHARE_SETTINGS=1; SHARE_CLAUDEMD=1; SHARE_COMMANDS=1
+    SHARE_AGENTS=1; SHARE_SKILLS=1; SHARE_PLUGINS=1; SHARE_CONFIG=1 ;;
+  0 | false | no)
+    SHARE_SETTINGS=0; SHARE_CLAUDEMD=0; SHARE_COMMANDS=0
+    SHARE_AGENTS=0; SHARE_SKILLS=0; SHARE_PLUGINS=0; SHARE_CONFIG=0 ;;
 esac
+
+# Per-item overrides (win over the back-compat block above and the baked defaults).
+case "${CCVM_SHARE_SETTINGS:-}" in 1 | true | yes) SHARE_SETTINGS=1 ;; 0 | false | no) SHARE_SETTINGS=0 ;; esac
+case "${CCVM_SHARE_CLAUDEMD:-}" in 1 | true | yes) SHARE_CLAUDEMD=1 ;; 0 | false | no) SHARE_CLAUDEMD=0 ;; esac
+case "${CCVM_SHARE_COMMANDS:-}" in 1 | true | yes) SHARE_COMMANDS=1 ;; 0 | false | no) SHARE_COMMANDS=0 ;; esac
+case "${CCVM_SHARE_AGENTS:-}" in 1 | true | yes) SHARE_AGENTS=1 ;; 0 | false | no) SHARE_AGENTS=0 ;; esac
+case "${CCVM_SHARE_SKILLS:-}" in 1 | true | yes) SHARE_SKILLS=1 ;; 0 | false | no) SHARE_SKILLS=0 ;; esac
+case "${CCVM_SHARE_PLUGINS:-}" in 1 | true | yes) SHARE_PLUGINS=1 ;; 0 | false | no) SHARE_PLUGINS=0 ;; esac
+case "${CCVM_SHARE_CONFIG:-}" in 1 | true | yes) SHARE_CONFIG=1 ;; 0 | false | no) SHARE_CONFIG=0 ;; esac
 
 # Project-history persistence precedence: CCVM_PERSIST_PROJECTS overrides the baked
 # persistClaudeProjects default for one run (mounts host ~/.claude/projects read-write so
@@ -269,7 +294,7 @@ case "${CCVM_PERSIST_PROJECTS:-}" in
   0 | false | no) PERSISTPROJECTS=0 ;;
 esac
 
-# Git-config sharing precedence: CCVM_SHARE_GIT_CONFIG overrides the baked shareGitConfig
+# Git-config sharing precedence: CCVM_SHARE_GIT_CONFIG overrides the baked share.gitConfig
 # default for one run, same pattern as above.
 case "${CCVM_SHARE_GIT_CONFIG:-}" in
   1 | true | yes) SHAREGIT=1 ;;
@@ -392,7 +417,7 @@ esac
 # your browser, paste the code back. Anything obtained that way lives only in the VM's tmpfs
 # and evaporates on exit (ephemeral, by design).
 if [[ $SHELL_MODE != 1 && -z ${!APIKEYVAR:-} ]]; then
-  warn "\$$APIKEYVAR is not set — starting Claude unauthenticated (shareClaudeConfig shares your settings and memory, not your login). Run /login inside the VM for web auth, or set \$$APIKEYVAR; either way the credential stays in the VM and vanishes on exit."
+  warn "\$$APIKEYVAR is not set — starting Claude unauthenticated (ccvm shares your settings and memory, not your login). Run /login inside the VM for web auth, or set \$$APIKEYVAR; either way the credential stays in the VM and vanishes on exit."
 fi
 
 # mlock preflight: QEMU started with mem-lock=on aborts if it cannot lock the guest RAM, so
@@ -482,56 +507,74 @@ STORE_ARGS+=(-device "virtio-blk-$BUS,drive=store")
 WS_FSDEV="local,id=ws,path=$WORKDIR,security_model=none"
 [[ $MODE == overlay ]] && WS_FSDEV="$WS_FSDEV,readonly=on"
 
-# Optional: the host's Claude config, read-only — reuse your settings, custom commands and
-# global memory inside the VM. NOT your login: the OAuth credential is excluded — kept out of
-# the seed here, and hidden from the config view in the guest (guest/launcher.nix) — so the VM
-# authenticates with your own /login or API key, never the host's stored token. The ~/.claude
-# directory rides a read-only 9p mount; the separate home-root ~/.claude.json (config, not the
-# token) is staged through the seed. The guest overlays config onto a writable tmpfs, so
-# claude's writes are ephemeral and never reach the host.
-CONFIG_ARGS=()
-if [[ $SHARECLAUDE == 1 ]]; then
-  if [[ -d "$HOME/.claude" ]]; then
-    # Resolve the root so a home-manager-symlinked ~/.claude is exported as the real dir.
-    CFGPATH="$(readlink -f "$HOME/.claude")"
-    CONFIG_ARGS+=(-fsdev "local,id=cfg,path=$CFGPATH,security_model=none,readonly=on")
-    CONFIG_ARGS+=(-device "virtio-9p-$BUS,fsdev=cfg,mount_tag=ccvm-config")
-    printf '1' >"$SEED/share-claude-config"
+# ---- ~/.claude allowlist staging (replaces the old whole-dir 9p config mount) ----
+# Each enabled share.* item is copied with cp -aL (dereferences home-manager symlinks into
+# real files) into $SEED/claude-config/<name>. The guest lays them into a fresh tmpfs
+# ~/.claude at boot — no 9p config mount, no root-private lower, no overlay whiteout.
+# Everything NOT listed here (projects/, sessions/, history.jsonl, .credentials.json, etc.)
+# NEVER reaches the seed by construction. Defense in depth: a final find strips any
+# .credentials.json that a directory cp dragged in at any depth.
+CLAUDEDIR="$HOME/.claude"
+if [[ -d "$CLAUDEDIR" ]]; then
+  CFGOUT="$SEED/claude-config"
+  mkdir -p "$CFGOUT"
 
-    # home-manager (and other dotfile managers) populate ~/.claude with symlinks whose
-    # targets live OUTSIDE the tree — e.g. settings.json -> /nix/store/…-home-manager-files/…
-    # Those targets are absent from the guest, so the symlinks dangle on the read-only 9p
-    # mount and claude can't read its config. Stage the *dereferenced contents* of every
-    # escaping symlink into the seed; the guest lays them over the overlay so the config is
-    # actually readable. .credentials.json is never followed — the OAuth secret is never copied
-    # into the seed (and is excluded from the config view in the guest, so it never crosses).
-    while IFS= read -r -d '' link; do
-      rel="${link#"$CFGPATH/"}"
-      [[ $rel == ".credentials.json" ]] && continue
-      tgt="$(readlink -f "$link" 2>/dev/null)" || continue
-      [[ -e $tgt && -r $tgt ]] || continue
-      case "$tgt/" in "$CFGPATH/"*) continue ;; esac # internal link: already resolves on 9p
-      mkdir -p "$SEED/config-deref/$(dirname "$rel")"
-      cp -rL "$link" "$SEED/config-deref/$rel"
-    done < <(find "$CFGPATH" -type l -print0 2>/dev/null)
-    # Defense in depth: the per-link guard above matches only a *top-level*
-    # .credentials.json, but `cp -rL` of an escaping directory symlink can drag a nested
-    # one in. The OAuth secret must never reach the on-disk seed, so strip any
-    # .credentials.json the staging produced, at any depth. Invariant check: grep the
-    # seed for the credential -> zero hits.
-    find "$SEED/config-deref" -name '.credentials.json' -delete 2>/dev/null || true
+  # File items: copy individual files if they exist (cp -aL dereferences symlinks).
+  if [[ $SHARE_SETTINGS == 1 ]]; then
+    for f in settings.json settings.local.json; do
+      [[ -e "$CLAUDEDIR/$f" ]] && cp -aL "$CLAUDEDIR/$f" "$CFGOUT/$f" 2>/dev/null || true
+    done
   fi
-  [[ -f "$HOME/.claude.json" ]] && cp "$HOME/.claude.json" "$SEED/claude-json"
+  if [[ $SHARE_CLAUDEMD == 1 ]]; then
+    [[ -e "$CLAUDEDIR/CLAUDE.md" ]] && cp -aL "$CLAUDEDIR/CLAUDE.md" "$CFGOUT/CLAUDE.md" 2>/dev/null || true
+  fi
+
+  # Directory items: copy the whole dir if it exists.
+  if [[ $SHARE_COMMANDS == 1 ]]; then
+    [[ -d "$CLAUDEDIR/commands" ]] && cp -aL "$CLAUDEDIR/commands" "$CFGOUT/commands" 2>/dev/null || true
+  fi
+  if [[ $SHARE_AGENTS == 1 ]]; then
+    [[ -d "$CLAUDEDIR/agents" ]] && cp -aL "$CLAUDEDIR/agents" "$CFGOUT/agents" 2>/dev/null || true
+  fi
+  if [[ $SHARE_SKILLS == 1 ]]; then
+    [[ -d "$CLAUDEDIR/skills" ]] && cp -aL "$CLAUDEDIR/skills" "$CFGOUT/skills" 2>/dev/null || true
+  fi
+  if [[ $SHARE_PLUGINS == 1 ]]; then
+    [[ -d "$CLAUDEDIR/plugins" ]] && cp -aL "$CLAUDEDIR/plugins" "$CFGOUT/plugins" 2>/dev/null || true
+  fi
+  if [[ $SHARE_CONFIG == 1 ]]; then
+    [[ -d "$CLAUDEDIR/config" ]] && cp -aL "$CLAUDEDIR/config" "$CFGOUT/config" 2>/dev/null || true
+  fi
+
+  # Defense in depth: strip any .credentials.json a directory copy dragged in at any depth.
+  # The credential must never reach the on-disk seed. Invariant: grep $SEED for the credential -> 0.
+  find "$CFGOUT" -name '.credentials.json' -delete 2>/dev/null || true
+fi
+
+# ~/.claude.json (home-root, distinct from ~/.claude/ dir) is config, but it CAN carry MCP
+# server blocks with inline secrets (env tokens, Authorization headers) and a legacy primaryApiKey.
+# Gated on share.settings (it is startup config). Stage a SANITIZED copy: drop mcpServers[].env,
+# mcpServers[].headers and primaryApiKey (same pattern as share.gitConfig strips credential.*),
+# keeping the non-secret structure. Secure-fail: if jq is missing or the file is not valid JSON,
+# stage NOTHING rather than risk leaking a token — hence jq is a wrapper runtimeInput.
+if [[ $SHARE_SETTINGS == 1 && -f "$HOME/.claude.json" ]]; then
+  if command -v jq >/dev/null 2>&1 &&
+    jq 'if has("mcpServers") then .mcpServers |= with_entries(.value |= del(.env, .headers)) else . end | del(.primaryApiKey)' \
+      "$HOME/.claude.json" >"$SEED/claude-json" 2>/dev/null; then
+    : # sanitized copy staged
+  else
+    rm -f "$SEED/claude-json"
+    warn "could not sanitize ~/.claude.json (jq missing or invalid JSON) — not staging it into the VM"
+  fi
 fi
 
 # ---- persist ~/.claude/projects (opt-in) -----------------------------------
 # Claude stores per-project SESSION TRANSCRIPTS (read by `claude --resume`) and per-project
-# MEMORY under ~/.claude/projects/<cwd-slug>/. With shareClaudeConfig those live on the
-# read-only overlay lower, so in-VM writes go to the ephemeral tmpfs upper and vanish — a
-# session started in ccvm can't be resumed later, and memories don't survive. When opted in we
-# mount the host's ~/.claude/projects read-WRITE over that subpath so those writes persist back.
-# Scoped to projects/ ONLY: the OAuth credential (~/.claude/.credentials.json, at the ~/.claude
-# ROOT, not under projects/) is never in this share, so it is still never written to the host.
+# MEMORY under ~/.claude/projects/<cwd-slug>/. By default those live in the ephemeral tmpfs
+# ~/.claude and vanish on exit — a session started in ccvm can't be resumed later. When opted
+# in we mount the host's ~/.claude/projects read-WRITE into the guest's tmpfs ~/.claude so
+# those writes persist back to the host. Scoped to projects/ ONLY: the OAuth credential
+# (~/.claude/.credentials.json, at the ~/.claude ROOT) is never staged and never in this share.
 PROJECTS_ARGS=()
 if [[ $PERSISTPROJECTS == 1 ]]; then
   PROJDIR="$HOME/.claude/projects"
@@ -665,6 +708,11 @@ fi
 # so authentication never breaks even if the user forgot to list it.
 if [[ -n ${EGRESSALLOW// /} ]]; then
   : >"$SEED/egress-allow"
+  # name->IP pin map (FQDN entries only): the guest writes these into /etc/hosts so the in-VM
+  # resolver returns exactly the IPs the firewall allows. Without it the host (launch-time) and
+  # guest (runtime) resolvers diverge on round-robin/CDN hosts — the guest dials an unpinned IP
+  # and it's silently dropped (the request hangs). See guest/launcher.nix + CLAUDE.md "Egress".
+  : >"$SEED/egress-hosts"
   # The "lock down" marker: present whenever the user opted in, independent of how many IPs
   # actually resolved. The guest enforces the firewall on THIS file, not on a non-empty
   # allow set, so an empty allow set fails CLOSED (deny-all) instead of silently reverting to
@@ -676,7 +724,10 @@ if [[ -n ${EGRESSALLOW// /} ]]; then
       */* | *:*) printf '%s\n' "$entry" >>"$SEED/egress-allow" ;; # CIDR or IPv6 literal — verbatim
       *[!0-9.]*)                                                   # has a non-IPv4 char => FQDN; resolve to A/AAAA
         while read -r ip _; do
-          [[ -n $ip ]] && printf '%s\n' "$ip" >>"$SEED/egress-allow"
+          if [[ -n $ip ]]; then
+            printf '%s\n' "$ip" >>"$SEED/egress-allow"
+            printf '%s %s\n' "$ip" "$entry" >>"$SEED/egress-hosts" # pin name->IP (see above)
+          fi
         done < <(getent ahosts "$entry" 2>/dev/null)
         ;;
       *) printf '%s\n' "$entry" >>"$SEED/egress-allow" ;; # bare IPv4 — verbatim
@@ -688,6 +739,7 @@ if [[ -n ${EGRESSALLOW// /} ]]; then
   read -ra _egress_entries <<<"$EGRESSALLOW"
   for entry in "${_egress_entries[@]}"; do resolve_into_seed "$entry"; done
   sort -u "$SEED/egress-allow" -o "$SEED/egress-allow"
+  sort -u "$SEED/egress-hosts" -o "$SEED/egress-hosts"
   # Fail closed, loudly, if the user opted in but NOTHING resolved (no literal IP/CIDR and
   # total DNS failure — even api.anthropic.com). Booting on would either (a) leave egress
   # open were the guest gating on a non-empty set, or (b) start a VM that can't reach the API
@@ -725,7 +777,6 @@ QEMU_ARGS=(
   -device "virtio-9p-$BUS,fsdev=seed,mount_tag=ccvm-seed"
   -fsdev "$WS_FSDEV"
   -device "virtio-9p-$BUS,fsdev=ws,mount_tag=ccvm-workspace"
-  "${CONFIG_ARGS[@]}"
   "${PROJECTS_ARGS[@]}"
   "${SCRATCH_ARGS[@]}"
   -device "virtio-rng-$BUS"

@@ -43,12 +43,19 @@ CRED_MARKER="OAUTH-CREDENTIAL-MUST-NOT-LEAK"
 NESTED_CRED_MARKER="NESTED-CREDENTIAL-MUST-NOT-LEAK"
 SETTINGS_MARKER="settings-content-should-be-staged"
 API_KEY="sk-ant-SECRET-KEY-MUST-NOT-LEAK"
+# ~/.claude.json (M2) secret-bearing markers: an MCP env token, an MCP auth header, and a legacy
+# primaryApiKey. None may survive into seed/claude-json; the non-secret userID must.
+MCP_ENV_MARKER="MCP-ENV-TOKEN-MUST-NOT-LEAK"
+MCP_HEADER_MARKER="MCP-AUTH-HEADER-MUST-NOT-LEAK"
+PRIMARY_KEY_MARKER="PRIMARY-APIKEY-MUST-NOT-LEAK"
+NONSECRET_MARKER="nonsecret-userid-should-be-staged"
 
 # ---- fixture: a home-manager-style ~/.claude -------------------------------
 # Config files live OUTSIDE ~/.claude (in a "store") and are symlinked in, exactly like
 # home-manager. settings.json escapes the tree (must be dereferenced into the seed); the
-# OAuth credential is ALSO an escaping symlink (must NOT be) — both the top-level one and
-# one dragged in via an escaping directory symlink.
+# OAuth credential is ALSO an escaping symlink (must NOT be). Directories like agents/
+# are also escaping symlinks (nested .credentials.json must be stripped by defense-in-depth).
+# State/history/session files must never be staged regardless of their symlink status.
 HM_STORE="$WORK/hm-store"
 mkdir -p "$HM_STORE/.claude" "$HM_STORE/agents"
 printf '%s\n' "$SETTINGS_MARKER" >"$HM_STORE/.claude/settings.json"
@@ -61,9 +68,27 @@ mkdir -p "$FAKE_HOME/.claude"
 ln -s "$HM_STORE/.claude/settings.json" "$FAKE_HOME/.claude/settings.json"
 ln -s "$HM_STORE/.claude/.credentials.json" "$FAKE_HOME/.claude/.credentials.json"
 # An escaping *directory* symlink whose target contains a nested .credentials.json — the
-# defense-in-depth `find -delete` must strip it after cp -rL drags it in.
+# defense-in-depth `find -delete` must strip it after cp -aL drags it in.
 ln -s "$HM_STORE/agents" "$FAKE_HOME/.claude/agents"
-printf '{"non":"secret"}\n' >"$FAKE_HOME/.claude.json"
+# Commands dir (enabled by default), skills dir (enabled), plugins dir (off by default),
+# config dir (off by default) — assert correct staging/exclusion below.
+mkdir -p "$FAKE_HOME/.claude/commands" "$FAKE_HOME/.claude/skills" \
+         "$FAKE_HOME/.claude/plugins" "$FAKE_HOME/.claude/config"
+printf 'my-command\n' >"$FAKE_HOME/.claude/commands/my-cmd.md"
+printf 'my-skill\n' >"$FAKE_HOME/.claude/skills/my-skill.md"
+printf 'plugin-data\n' >"$FAKE_HOME/.claude/plugins/plugin.md"
+printf 'config-data\n' >"$FAKE_HOME/.claude/config/config.json"
+# State/history items that must NEVER be staged regardless of any toggle.
+mkdir -p "$FAKE_HOME/.claude/projects/some-proj" "$FAKE_HOME/.claude/sessions"
+printf 'transcript\n' >"$FAKE_HOME/.claude/projects/some-proj/transcript.jsonl"
+printf 'session\n' >"$FAKE_HOME/.claude/sessions/sess.json"
+printf 'history\n' >"$FAKE_HOME/.claude/history.jsonl"
+# ~/.claude.json mixes non-secret config (userID) with inline MCP secrets (env token + auth header)
+# and a legacy primaryApiKey — the wrapper must stage a SANITIZED copy (secrets stripped, structure
+# kept). One JSON line so jq parses it; the sanitization is asserted in section 1b.
+cat >"$FAKE_HOME/.claude.json" <<EOF
+{"userID":"$NONSECRET_MARKER","mcpServers":{"acme":{"command":"acme-mcp","env":{"ACME_TOKEN":"$MCP_ENV_MARKER"},"headers":{"Authorization":"Bearer $MCP_HEADER_MARKER"}}},"primaryApiKey":"$PRIMARY_KEY_MARKER"}
+EOF
 
 # Run the wrapper in dry-run; echo the scratch dir it prints. Each call gets a fresh CWD
 # so $PWD (the shared workspace) is well-defined.
@@ -74,39 +99,99 @@ run() {
 }
 
 # ===========================================================================
-# 1. shareClaudeConfig staging: secret out, non-secret in.
+# 1. share.* allowlist staging: only enabled items cross; secrets/state never do.
 # ===========================================================================
-SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=1 run)/seed"
+# Default posture: settings/claudeMd/commands/agents/skills ON; plugins/config OFF.
+SEED="$(HOME="$FAKE_HOME" run)/seed"
+CFGOUT="$SEED/claude-config"
 
+# Credential exclusion — airtight by construction (it was never staged).
 if [[ -z "$(grep -rl "$CRED_MARKER" "$SEED" 2>/dev/null)" ]]; then
-  ok "top-level OAuth credential never reaches the seed"
+  ok "share.*: top-level OAuth credential never reaches the seed"
 else
-  no "top-level OAuth credential LEAKED into the seed: $(grep -rl "$CRED_MARKER" "$SEED")"
+  no "share.*: top-level OAuth credential LEAKED into the seed: $(grep -rl "$CRED_MARKER" "$SEED")"
 fi
-
 if [[ -z "$(grep -rl "$NESTED_CRED_MARKER" "$SEED" 2>/dev/null)" ]]; then
-  ok "nested OAuth credential (via dir symlink) never reaches the seed"
+  ok "share.*: nested OAuth credential (via dir symlink) never reaches the seed"
 else
-  no "nested OAuth credential LEAKED into the seed"
+  no "share.*: nested OAuth credential LEAKED into the seed"
 fi
 
-if [[ -f "$SEED/config-deref/settings.json" ]] &&
-  grep -q "$SETTINGS_MARKER" "$SEED/config-deref/settings.json"; then
-  ok "escaping settings.json symlink is dereferenced into the seed"
+# Enabled items land in seed/claude-config/.
+if [[ -f "$CFGOUT/settings.json" ]] && grep -q "$SETTINGS_MARKER" "$CFGOUT/settings.json"; then
+  ok "share.settings: settings.json staged (symlink dereferenced)"
 else
-  no "settings.json was not staged into config-deref"
+  no "share.settings: settings.json missing from seed/claude-config"
 fi
+[[ -d "$CFGOUT/commands" && -f "$CFGOUT/commands/my-cmd.md" ]] &&
+  ok "share.commands: commands/ dir staged" ||
+  no "share.commands: commands/ not staged"
+[[ -d "$CFGOUT/agents" && -f "$CFGOUT/agents/helper.md" ]] &&
+  ok "share.agents: agents/ dir staged (non-credential content survives)" ||
+  no "share.agents: agents/ not staged or content wrong"
+[[ ! -e "$CFGOUT/agents/.credentials.json" ]] &&
+  ok "share.agents: nested .credentials.json stripped from agents/ copy" ||
+  no "share.agents: .credentials.json present inside agents/ copy"
+[[ -d "$CFGOUT/skills" && -f "$CFGOUT/skills/my-skill.md" ]] &&
+  ok "share.skills: skills/ dir staged" ||
+  no "share.skills: skills/ not staged"
 
-if [[ ! -e "$SEED/config-deref/.credentials.json" ]]; then
-  ok "no .credentials.json file exists anywhere under config-deref"
-else
-  no ".credentials.json present under config-deref"
-fi
+# Disabled by default — must NOT be staged.
+[[ ! -d "$CFGOUT/plugins" ]] &&
+  ok "share.plugins: plugins/ absent by default (off)" ||
+  no "share.plugins: plugins/ staged when it should be off by default"
+[[ ! -d "$CFGOUT/config" ]] &&
+  ok "share.config: config/ absent by default (off)" ||
+  no "share.config: config/ staged when it should be off by default"
 
-[[ -f "$SEED/claude-json" ]] && ok "non-secret ~/.claude.json staged" ||
+# State/history items — must NEVER cross regardless of any toggle.
+[[ ! -d "$CFGOUT/projects" && ! -d "$CFGOUT/sessions" ]] &&
+  ok "share.*: projects/ and sessions/ never staged (state, not config)" ||
+  no "share.*: projects/ or sessions/ leaked into seed/claude-config"
+[[ ! -f "$CFGOUT/history.jsonl" ]] &&
+  ok "share.*: history.jsonl never staged" ||
+  no "share.*: history.jsonl leaked into seed/claude-config"
+
+# Per-item toggle: CCVM_SHARE_SKILLS=0 suppresses skills even when default is on.
+SEED2="$(HOME="$FAKE_HOME" CCVM_SHARE_SKILLS=0 run)/seed"
+[[ ! -d "$SEED2/claude-config/skills" ]] &&
+  ok "share.skills: CCVM_SHARE_SKILLS=0 suppresses skills/ staging" ||
+  no "share.skills: skills/ still staged with CCVM_SHARE_SKILLS=0"
+
+# Back-compat: CCVM_SHARE_CLAUDE_CONFIG=0 suppresses all claude items.
+SEED3="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 run)/seed"
+[[ ! -d "$SEED3/claude-config/settings.json" && ! -d "$SEED3/claude-config/commands" ]] &&
+  ok "share.*: CCVM_SHARE_CLAUDE_CONFIG=0 suppresses all claude items" ||
+  no "share.*: CCVM_SHARE_CLAUDE_CONFIG=0 did not suppress staging"
+
+# Back-compat: CCVM_SHARE_CLAUDE_CONFIG=0 but per-item override wins.
+SEED4="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 CCVM_SHARE_SETTINGS=1 run)/seed"
+[[ -f "$SEED4/claude-config/settings.json" ]] &&
+  ok "share.*: per-item CCVM_SHARE_SETTINGS=1 wins over CCVM_SHARE_CLAUDE_CONFIG=0" ||
+  no "share.*: per-item override did not win over back-compat toggle"
+
+# ---- 1b. ~/.claude.json sanitization (M2): inline MCP secrets (env tokens, auth headers) and a
+#          legacy primaryApiKey are stripped from the staged copy; the non-secret structure stays.
+#          Gated on share.settings (the baked default is on, so this run has it).
+CJ="$SEED/claude-json"
+[[ -f "$CJ" ]] && ok "~/.claude.json staged (gated on share.settings, which is on)" ||
   no "~/.claude.json not staged"
-[[ "$(cat "$SEED/share-claude-config" 2>/dev/null)" == 1 ]] && ok "share-claude-config flag written" ||
-  no "share-claude-config flag missing"
+if grep -q "$MCP_ENV_MARKER" "$CJ" 2>/dev/null || grep -q "$MCP_HEADER_MARKER" "$CJ" 2>/dev/null ||
+  grep -q "$PRIMARY_KEY_MARKER" "$CJ" 2>/dev/null; then
+  no "~/.claude.json secret LEAKED into the staged copy (MCP env/header or primaryApiKey)"
+else
+  ok "~/.claude.json: MCP env/header tokens + primaryApiKey stripped from the staged copy"
+fi
+grep -q "$NONSECRET_MARKER" "$CJ" 2>/dev/null && ok "~/.claude.json: non-secret userID preserved" ||
+  no "~/.claude.json: non-secret userID dropped (over-sanitized)"
+grep -q '"acme"' "$CJ" 2>/dev/null && ok "~/.claude.json: MCP server definition kept (only secrets stripped)" ||
+  no "~/.claude.json: MCP server block dropped (over-sanitized)"
+
+# ~/.claude.json NOT staged when share.settings is off.
+SEED5="$(HOME="$FAKE_HOME" CCVM_SHARE_SETTINGS=0 run)/seed"
+[[ ! -f "$SEED5/claude-json" ]] &&
+  ok "~/.claude.json: not staged when share.settings=0" ||
+  no "~/.claude.json: staged even when share.settings=0"
 
 # ===========================================================================
 # 2. The API key never reaches the seed (it rides SendEnv over SSH only).

@@ -19,6 +19,7 @@ cd "$(dirname "$0")/.."
 export CCVM_ACCEL="${CCVM_ACCEL:-tcg}"
 export CCVM_MACHINE="${CCVM_MACHINE:-q35}"
 # Don't drag the host's real ~/.claude into the boot test; we assert on files, not config.
+# Disable all share.* claude items for the default runs (back-compat env var toggles all).
 export CCVM_SHARE_CLAUDE_CONFIG="${CCVM_SHARE_CLAUDE_CONFIG:-0}"
 
 echo "building stub-claude ccvm wrappers (builds the guest closure; first run is slow)…" >&2
@@ -156,24 +157,23 @@ grep -qa 'WRITE:ok' <<<"$OUT" &&
   no "overlay mode: host file LEAKED — isolation broken"
 rm -rf "$PROJ_RO"
 
-# ---- shareClaudeConfig: settings cross, the OAuth credential never does -----
-# shareClaudeConfig shares ~/.claude (settings, commands, memory) read-only but EXCLUDES the
-# OAuth credential by design — auth in the VM is /login or an API key, never the host's token.
-# Stage a fixture ~/.claude (a settings file + a credential marker), run with sharing ON, and
-# assert the guest reads settings but the credential is reachable nowhere the agent can get to
-# (the whited-out overlay path, nor the raw read-only lower under root-private /run/ccvm-priv).
+# ---- share.settings: settings cross, the OAuth credential never does -----
+# share.settings stages ~/.claude/settings.json into the VM's tmpfs ~/.claude — the credential
+# is NEVER staged (excluded by construction, not a share.* item). Stage a fixture ~/.claude
+# (a settings file + a credential), run with share.settings on (the default), and assert the
+# guest reads settings but the credential is nowhere reachable.
 CFG_HOME="$(mktemp -d)"
 mkdir -p "$CFG_HOME/.claude"
 printf '{"theme":"dark"}\n' >"$CFG_HOME/.claude/settings.json"
 printf '{"oauth":"CCVM-CRED-MUST-NOT-CROSS"}\n' >"$CFG_HOME/.claude/.credentials.json"
 PROJ_CFG="$(mktemp -d)"
-OUT="$(HOME="$CFG_HOME" CCVM_SHARE_CLAUDE_CONFIG=1 run_capture "$WRAP" "$PROJ_CFG")"
+OUT="$(HOME="$CFG_HOME" CCVM_SHARE_SETTINGS=1 run_capture "$WRAP" "$PROJ_CFG")"
 grep -qa '^CONFIG:settings-readable$' <<<"$OUT" &&
-  ok "shareClaudeConfig: host settings.json readable in the guest" ||
-  no "shareClaudeConfig: settings.json not readable: $(grep -a '^CONFIG:' <<<"$OUT")"
+  ok "share.settings: host settings.json readable in the guest" ||
+  no "share.settings: settings.json not readable: $(grep -a '^CONFIG:' <<<"$OUT")"
 grep -qa '^CONFIG:credential-excluded$' <<<"$OUT" &&
-  ok "shareClaudeConfig: OAuth credential excluded (not via overlay nor the raw lower)" ||
-  no "shareClaudeConfig: OAuth credential REACHABLE in the guest — the login would leak: $(grep -a '^CONFIG:' <<<"$OUT")"
+  ok "share.settings: OAuth credential excluded (not staged — airtight by construction)" ||
+  no "share.settings: OAuth credential REACHABLE in the guest — the login would leak: $(grep -a '^CONFIG:' <<<"$OUT")"
 rm -rf "$PROJ_CFG" "$CFG_HOME"
 
 # ---- egress allowlist: only the allowlisted host is reachable --------------
@@ -187,6 +187,14 @@ grep -qa '^EGRESS:allowed:reachable$' <<<"$OUT" &&
 grep -qa '^EGRESS:denied:blocked$' <<<"$OUT" &&
   ok "egress allowlist: non-allowlisted host blocked" ||
   no "egress: non-allowlisted host NOT blocked — exfil channel open: $(grep -a '^EGRESS:' <<<"$OUT")"
+# The /etc/hosts pin: the host resolved example.com at launch and staged a name->IP map; the guest
+# pins it into /etc/hosts so the agent resolves example.com to an IP the firewall allows — the fix
+# for round-robin hosts that would otherwise resolve in-guest to an unpinned, dropped IP. Assert
+# the pin landed (a real `git clone` from github is the human round-robin check; example.com is too
+# stable to exercise drift here).
+grep -qa '^HOSTS:pinned$' <<<"$OUT" &&
+  ok "egress allowlist: allowlisted FQDN pinned in the guest's /etc/hosts (resolver can't drift)" ||
+  no "egress: FQDN not pinned in /etc/hosts — guest resolver can drift to a dropped IP: $(grep -a '^HOSTS:' <<<"$OUT")"
 # Setting egressAllowlist auto-drops the agent's sudo (agentSudo auto), so a prompt-injected agent
 # can't `nft flush` the in-guest firewall to reopen egress. This is the C-1 mitigation — assert root
 # is actually gone (the firewall itself, installed by a root systemd unit, is checked above).

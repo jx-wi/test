@@ -18,9 +18,19 @@
     trustedPublicKeys = [ ]; # public keys that verify paths from `substituters`
   };
   apiKeyVariable = "ANTHROPIC_API_KEY"; # host env var carrying the key (rides SendEnv only)
-  shareClaudeConfig = true; # reuse the host ~/.claude (settings/commands/memory), read-only; the OAuth login is NOT shared — auth in-VM via /login or API key
+  # Granular allowlist for what crosses from the host ~/.claude into the VM.
+  # Everything else (projects/, sessions/, history.jsonl, .credentials.json, etc.) NEVER crosses.
+  share = {
+    gitConfig = true; # stage a sanitized global git config (was: shareGitConfig)
+    settings = true; # ~/.claude/settings.json + settings.local.json
+    claudeMd = true; # ~/.claude/CLAUDE.md (global memory)
+    commands = true; # ~/.claude/commands/
+    agents = true; # ~/.claude/agents/
+    skills = true; # ~/.claude/skills/
+    plugins = false; # ~/.claude/plugins/
+    config = false; # ~/.claude/config/
+  };
   persistClaudeProjects = false; # persist ~/.claude/projects back to the host (resume + memory)
-  shareGitConfig = true; # stage a sanitized host git config so in-VM git commits as you
   extraClaudeMd = builtins.readFile ./ccvm-context.md; # guest ~/.claude/CLAUDE.md ("you're in ccvm")
   agentSudo = null; # null=auto: passwordless root in the guest, but DROPPED when egressAllowlist is set (so the agent can't `nft flush` the in-guest egress firewall). true/false forces it. Resolved in mkccvm.nix
   lockGuestMemory = false; # mlock guest RAM so it can't reach host swap

@@ -12,9 +12,10 @@
 let
   cfg = config.ccvm;
 
-  # 9p mount options shared by every share. msize=1M keeps 9p throughput tolerable
-  # for editing source trees; access=any + security_model=none on the host side means
-  # host uids pass straight through (uid 1000 host == ccvm in the guest).
+  # 9p mount options shared by every share. We request msize=1 MiB; QEMU's virtio-9p negotiates
+  # this DOWN (to ~512 KB in practice — verify with `grep msize /proc/mounts`), but it still keeps
+  # 9p throughput tolerable for editing source trees. access=any + security_model=none on the host
+  # side means host uids pass straight through (uid 1000 host == ccvm in the guest).
   # nosuid,nodev: defense in depth on every host-shared tree — the guest must never honour a
   # setuid bit or device node coming off 9p. (noexec is deliberately NOT set: the workspace has to
   # run project binaries / build scripts, and a shared ~/.claude may carry executable hooks/skills.)
@@ -63,7 +64,7 @@ let
 
   seedSetup = pkgs.writeShellApplication {
     name = "ccvm-seed-setup";
-    runtimeInputs = [ pkgs.coreutils pkgs.util-linux pkgs.shadow pkgs.gnugrep pkgs.nftables pkgs.kmod pkgs.cryptsetup pkgs.e2fsprogs ];
+    runtimeInputs = [ pkgs.coreutils pkgs.util-linux pkgs.shadow pkgs.gnugrep pkgs.nftables pkgs.kmod pkgs.cryptsetup pkgs.e2fsprogs config.systemd.package ];
     text = ''
       seed=/run/ccvm-seed
       mkdir -p "$seed"
@@ -124,62 +125,36 @@ let
           "$workdir"
       fi
 
-      # Optional host-config path: surface the host's ~/.claude (settings, custom commands,
-      # global memory) inside the VM as the read-only lower of an overlay, with a tmpfs upper
-      # for claude's own writes — so its state is usable but ephemeral and never persists back
-      # to the host. The OAuth credential is deliberately EXCLUDED (see below): shareClaudeConfig
-      # shares configuration, not the login — auth in the VM is the user's own /login or API key.
-      # The home-root ~/.claude.json is staged via the seed (config, not the secret token) and
-      # installed into the writable home.
-      if [ -f "$seed/share-claude-config" ]; then
-        # Mount the host ~/.claude lower under a 0700 root-only parent. The raw 9p lower still
-        # carries .credentials.json (9p exports a whole dir; we can't drop one file from the
-        # export), so gate the lower behind a dir the agent can't traverse — the overlay below,
-        # mounted by root, still reads it because overlayfs uses the mounter's creds, not the
-        # agent's path access. (A root agent could still re-mount the ccvm-config 9p device
-        # directly; closing THAT needs host-side staging — see CLAUDE.md. With egressAllowlist
-        # the agent isn't root, so this exclusion is airtight there.)
-        install -d -m 700 -o root -g root /run/ccvm-priv
-        mkdir -p /run/ccvm-priv/host-claude
-        if mount -t 9p -o ${p9},ro ccvm-config /run/ccvm-priv/host-claude 2>/dev/null; then
-          install -d -m 700 -o ccvm -g users /home/ccvm/.claude
-          mkdir -p /run/ccvm-claude-upper /run/ccvm-claude-work
-          chown ccvm:users /run/ccvm-claude-upper /run/ccvm-claude-work
-          mount -t overlay overlay \
-            -o lowerdir=/run/ccvm-priv/host-claude,upperdir=/run/ccvm-claude-upper,workdir=/run/ccvm-claude-work \
-            /home/ccvm/.claude
-          # Exclude the OAuth credential from the merged config view: removing it ON THE OVERLAY
-          # writes a whiteout into the tmpfs upper that hides the read-only lower's copy — the host
-          # file is never touched (the lower is ro 9p). claude starts unauthenticated; the user runs
-          # /login (ephemeral, in the upper) or sets an API key. This also sidesteps the OAuth
-          # refresh-token rotation that would otherwise invalidate the host's own login on next use.
-          rm -f /home/ccvm/.claude/.credentials.json 2>/dev/null || true
-          # Lay the host-dereferenced config files (home-manager symlinks the wrapper
-          # resolved on the host) over the overlay. They land in the writable tmpfs upper,
-          # shadowing the now-dangling symlinks the 9p lower carries, so claude can actually
-          # read settings.json et al. Per-file chown (never `chown -R` the overlay root —
-          # that would copy every lower file up into the tmpfs). Best-effort: a hiccup here
-          # must not fail the oneshot and block sshd.
-          if [ -d "$seed/config-deref" ]; then
-            find "$seed/config-deref" -type f -print0 | while IFS= read -r -d "" f; do
-              rel="''${f#"$seed/config-deref/"}"
-              dst="/home/ccvm/.claude/$rel"
-              mkdir -p "$(dirname "$dst")" && rm -f "$dst" \
-                && cp "$f" "$dst" && chown ccvm:users "$dst"
-            done || true
+      # Set up ~/.claude from the seed's allowlist-staged config items.
+      # The host wrapper copied only the enabled share.* items (settings, CLAUDE.md, commands,
+      # agents, skills, and optionally plugins/config) into $seed/claude-config/ — nothing else
+      # (projects/, sessions/, history.jsonl, .credentials.json, …) is ever staged. The guest
+      # lays them into a fresh tmpfs ~/.claude so claude's writes stay ephemeral. No 9p config
+      # mount, no root-private lower, no overlay whiteout — credential exclusion is airtight
+      # by construction (it was never staged).
+      install -d -m 700 -o ccvm -g users /home/ccvm/.claude
+      if [ -d "$seed/claude-config" ]; then
+        # Copy each staged item into ~/.claude. Dirs recurse; chown afterward (never chown -R
+        # on an overlay root — copy-up hazard doesn't apply here since this is a plain tmpfs
+        # dir, but be explicit). Best-effort: a hiccup must not fail the oneshot and block sshd.
+        find "$seed/claude-config" -maxdepth 1 -mindepth 1 -print0 2>/dev/null \
+          | while IFS= read -r -d "" item; do
+          name="''${item##*/}"
+          dst="/home/ccvm/.claude/$name"
+          if [ -d "$item" ]; then
+            cp -r "$item" "$dst" 2>/dev/null && chown -R ccvm:users "$dst" 2>/dev/null || true
+          else
+            cp "$item" "$dst" 2>/dev/null && chown ccvm:users "$dst" 2>/dev/null || true
           fi
-        fi
+        done || true
       fi
 
       # Opt-in: persist ~/.claude/projects back to the host (session transcripts + memory).
-      # Mounted read-WRITE over the (read-only) config overlay's projects/ subpath, so Claude's
-      # writes there reach the host — `claude --resume` works across runs and memory survives.
-      # Must run AFTER the shareClaudeConfig overlay mount above so it layers over it; if
-      # shareClaudeConfig is off, /home/ccvm/.claude is plain tmpfs and we mount onto it just the
-      # same. No chown -R (passthrough + the uid remap already give correct host-side ownership;
-      # a recursive chown over a large history would also risk an overlay copy-up). Best-effort.
+      # Mounted read-WRITE into the tmpfs ~/.claude so Claude's writes reach the host —
+      # `claude --resume` works across runs and memory survives. Must run AFTER the staging
+      # block above so it layers over any staged projects/ content from the seed. No chown -R
+      # (passthrough + uid remap already give correct host-side ownership). Best-effort.
       if [ -f "$seed/persist-claude-projects" ]; then
-        install -d -m 700 -o ccvm -g users /home/ccvm/.claude
         mkdir -p /home/ccvm/.claude/projects
         mount -t 9p -o ${p9} ccvm-claude-projects /home/ccvm/.claude/projects || true
       fi
@@ -312,6 +287,23 @@ let
           } >/run/ccvm-egress-fallback.nft
           nft -f /run/ccvm-egress-fallback.nft 2>/dev/null || true
         fi
+
+        # Pin the host-resolved name->IP map into the guest resolver so the agent dials exactly
+        # what the firewall allows. Without this a round-robin/CDN host (github.com, npm) resolves
+        # in-guest to an IP outside the host's launch-time snapshot and is silently dropped (the
+        # request hangs). /etc/hosts is a store symlink and /etc is tmpfs, so build a real file from
+        # its current contents + our pins and swap it in, then reload resolved (the swap won't trip
+        # its inotify; if resolved isn't up yet it reads the file on start). Best-effort, fail-open:
+        # a hiccup just leaves FQDN allowlisting at its old host-only behaviour, never blocks sshd.
+        if [ -s "$seed/egress-hosts" ]; then
+          if cp --dereference /etc/hosts /run/ccvm-hosts 2>/dev/null \
+             && cat "$seed/egress-hosts" >>/run/ccvm-hosts \
+             && cp --remove-destination /run/ccvm-hosts /etc/hosts; then
+            systemctl reload-or-restart systemd-resolved.service >/dev/null 2>&1 || true
+          else
+            echo "ccvm: egress: could not pin /etc/hosts (allowlisted FQDNs may resolve to unpinned IPs)" >&2
+          fi
+        fi
       fi
 
       # Sanitized host git config (shareGitConfig): the wrapper stripped host-only /nix/store
@@ -326,13 +318,11 @@ let
       fi
 
       # ccvm-context global memory (extraClaudeMd): tell the agent it is inside ccvm. Laid at
-      # ~/.claude/CLAUDE.md owned by the (remapped) agent user. If shareClaudeConfig brought a
-      # host CLAUDE.md (a real file on the 9p lower, or one staged into the overlay upper by the
-      # config-deref loop above), APPEND to it rather than clobber the user's global memory —
-      # writing the combined file copies-up into the overlay's tmpfs upper, so the host file is
-      # never touched. Runs AFTER the shareClaudeConfig block so $dst reflects the host content.
+      # ~/.claude/CLAUDE.md owned by the (remapped) agent user. If share.claudeMd staged a host
+      # CLAUDE.md (now simply present as a file in the tmpfs ~/.claude), APPEND to it rather than
+      # clobber the user's global memory — the host file is never touched. Runs AFTER the
+      # claude-config staging block above so $dst already reflects any staged host content.
       if [ -f "$seed/claude-md" ]; then
-        install -d -m 700 -o ccvm -g users /home/ccvm/.claude
         dst=/home/ccvm/.claude/CLAUDE.md
         tmp=/home/ccvm/.claude/.CLAUDE.md.ccvm
         if [ -f "$dst" ]; then

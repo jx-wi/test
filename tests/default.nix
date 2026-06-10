@@ -16,7 +16,7 @@ let
   mkDryRunWrapper = { egressAllow ? "", egressPorts ? "443" }:
     pkgs.writeShellApplication {
       name = "ccvm";
-      runtimeInputs = with pkgs; [ coreutils openssh findutils getent git ];
+      runtimeInputs = with pkgs; [ coreutils openssh findutils getent git jq ];
       text = builtins.replaceStrings
         [
           "@KERNEL@"
@@ -27,7 +27,13 @@ let
           "@CORES@"
           "@MODE@"
           "@APIKEYVAR@"
-          "@SHARECLAUDE@"
+          "@SHARE_SETTINGS@"
+          "@SHARE_CLAUDEMD@"
+          "@SHARE_COMMANDS@"
+          "@SHARE_AGENTS@"
+          "@SHARE_SKILLS@"
+          "@SHARE_PLUGINS@"
+          "@SHARE_CONFIG@"
           "@PERSISTPROJECTS@"
           "@SHAREGIT@"
           "@CLAUDEMD@"
@@ -47,11 +53,17 @@ let
           "console=ttyS0" # APPEND
           "4096" # MEMORY
           "4" # CORES
-          "rw" # MODE          (production default: writableCwd=true)
+          "rw" # MODE             (production default: writableCwd=true)
           "ANTHROPIC_API_KEY" # APIKEYVAR
-          "1" # SHARECLAUDE      (production default: shareClaudeConfig=true)
-          "0" # PERSISTPROJECTS  (production default: persistClaudeProjects=false)
-          "1" # SHAREGIT         (production default: shareGitConfig=true)
+          "1" # SHARE_SETTINGS    (production default: share.settings=true)
+          "1" # SHARE_CLAUDEMD    (production default: share.claudeMd=true)
+          "1" # SHARE_COMMANDS    (production default: share.commands=true)
+          "1" # SHARE_AGENTS      (production default: share.agents=true)
+          "1" # SHARE_SKILLS      (production default: share.skills=true)
+          "0" # SHARE_PLUGINS     (production default: share.plugins=false)
+          "0" # SHARE_CONFIG      (production default: share.config=false)
+          "0" # PERSISTPROJECTS   (production default: persistClaudeProjects=false)
+          "1" # SHAREGIT          (production default: share.gitConfig=true)
           # CLAUDEMD: a fixture context file so the staging block has something to read; host.sh
           # asserts its marker + the runtime mode line reach seed/claude-md (production bakes the
           # real lib/ccvm-context.md).
