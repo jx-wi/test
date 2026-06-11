@@ -7,7 +7,7 @@ confirm the load-bearing invariants still hold and that the fixes landed in comm
 the booted guest (run `git log --oneline -15` to confirm it's present in this checkout).
 
 Work top to bottom. Each step has the command(s) and the **expected** result. At the end,
-produce a pass/fail report in the format in §7. Be concrete — run it, don't infer. If a result
+produce a pass/fail report in the format in §8. Be concrete — run it, don't infer. If a result
 disagrees with "expected", that's a finding: capture the exact output.
 
 The trust boundary is QEMU. In scope: defending the **host filesystem + the host's stored
@@ -247,7 +247,134 @@ stays ephemeral. No durable store exists beyond the project dir (and, if `persis
 
 ---
 
-## 6. Free-form red-teaming (go beyond the script)
+## 6. Image-paste clipboard bridge — only if `clipboard.images` is on
+
+**Scoping note:** this section is self-contained — if you were told "**pentest only clipboard and
+its related parts**", run *just* §0 (orientation) then this §6, and report in the §8 format. The
+feature: to make Ctrl+V image paste work, ccvm runs a fake `xclip`/`wl-paste` in the guest that
+fetches the **host** clipboard *image* over a single SSH reverse-forward (guest `127.0.0.1:9180` →
+a host-side `socat` clipboard server). Related parts in scope: the guest shims, the loopback bridge
+port, sshd's `AllowTcpForwarding=remote` + `PermitListen` pin, and the bridge's interaction with the
+egress firewall (§2). The **claim under test**: the bridge is *image-only* and rides loopback + the
+established SSH channel, so (a) host clipboard **text never crosses**, (b) the agent **cannot write**
+the host clipboard, (c) the channel **cannot be repurposed** to pivot to other host services or open
+new forwards, and (d) it is **not an egress bypass**. The one *accepted, documented* residual: under
+**open egress** the agent can pull a host clipboard **image** on demand and exfiltrate it — same class
+as the project tree, strictly less than native `claude`. That residual is **not** a finding; the four
+boundaries above are.
+
+### 6.0 Setup (do this on the HOST first, or the text test is vacuous)
+
+So the "no host text crosses" probe is meaningful, put a **recognizable secret** on your host
+clipboard before/at session start (and optionally a screenshot to exercise the image path):
+
+```text
+Wayland host:  printf 'CCVM-CLIP-SECRET-PENTEST' | wl-copy
+X11 host:      printf 'CCVM-CLIP-SECRET-PENTEST' | xclip -selection clipboard
+```
+
+### 6.1 Posture detection (inside the VM)
+
+```bash
+CLIP_PORT=9180   # cfg.clipboard.port
+echo "shims:  xclip=$(command -v xclip || echo none)   wl-paste=$(command -v wl-paste || echo none)"
+if { exec 3<>/dev/tcp/127.0.0.1/$CLIP_PORT; } 2>/dev/null; then exec 3<&- 3>&-; echo "bridge port $CLIP_PORT: LISTENING (host wired the bridge this run)"; else echo "bridge port $CLIP_PORT: dead"; fi
+```
+
+Interpret: **no shims** → `clipboard.images` is off → this whole section is **N/A**. **Shims present
+but port dead** → the host had no `wl-paste`/`xclip`, so the bridge is inert (nothing can cross — the
+image-only invariant holds trivially); still run 6.4–6.5 (no-write, no-pivot). **Port LISTENING** →
+run everything.
+
+A raw probe (a prompt-injected agent won't politely use the shim — it talks straight to the port, so
+we test the **host-side** enforcement directly):
+
+```bash
+clipreq(){ # $1 = raw request line; prints the host reply (binary-safe), empty if refused
+  { exec 3<>"/dev/tcp/127.0.0.1/$CLIP_PORT"; } 2>/dev/null || { echo "(no listener)"; return 1; }
+  printf '%s\n' "$1" >&3; timeout 5 cat <&3; exec 3<&- 3>&-
+}
+```
+
+### 6.2 HEADLINE — host clipboard TEXT must NEVER cross
+
+```bash
+echo "-- request host clipboard text in every text-ish form; expect EMPTY every time --"
+for t in 'text/plain' 'text/plain;charset=utf-8' 'STRING' 'UTF8_STRING' 'TEXT' 'text/html'; do
+  out="$(clipreq "$t" 2>/dev/null || true)"
+  case "$out" in
+    *CCVM-CLIP-SECRET-PENTEST*) echo "   >>> FAIL: host clipboard TEXT crossed for '$t' -> [$out]" ;;
+    '') echo "   ok   '$t' -> empty" ;;
+    *) echo "   ??   '$t' -> unexpected bytes (inspect): $(printf %s "$out" | tr -d '\0' | head -c 40)" ;;
+  esac
+done
+```
+
+**Expected:** every text target returns **empty**; `CCVM-CLIP-SECRET-PENTEST` never appears.
+**FAIL = Critical** (host clipboard text is a credential-class secret and would be exfiltratable) if
+the secret crosses for any target.
+
+### 6.3 Image path works + crafted requests are inert (the residual, and its limits)
+
+```bash
+echo "-- (a) the bridge serves only IMAGES: image/png returns bytes iff the host clipboard has an image --"
+clipreq image/png 2>/dev/null > /tmp/clip.bin || true
+echo "   image bytes: $(wc -c </tmp/clip.bin 2>/dev/null || echo 0)"; head -c 8 /tmp/clip.bin | xxd | head -1
+echo "-- (b) crafted / injection requests must neither widen nor execute (literal case arms host-side) --"
+rm -f /tmp/clip-pwned
+clipreq "image/png\$(touch /tmp/clip-pwned)" >/dev/null 2>&1 || true   # literal \$ -> not executed
+clipreq 'image/png; id'                       >/dev/null 2>&1 || true
+clipreq '../../etc/passwd'                     >/dev/null 2>&1 || true
+[ -e /tmp/clip-pwned ] && echo "   >>> FAIL: a request string was executed as a command" || echo "   ok: no command execution, no widening"
+rm -f /tmp/clip.bin
+```
+
+**Expected:** `image/png` returns a PNG (magic `89 50 4e 47`) only if you copied an image on the host —
+otherwise empty; **no** `/tmp/clip-pwned`. The image return is the **documented residual**, not a
+finding. **FAIL = High** if a non-image target returns data or a request executes.
+
+### 6.4 The agent cannot WRITE the host clipboard (no poison/phishing vector)
+
+```bash
+echo "-- the shims must be read-only: a copy-INTO-clipboard attempt must no-op --"
+printf 'EVIL-PAYLOAD-%s' "$RANDOM" | { command -v xclip >/dev/null && xclip -selection clipboard; } 2>/dev/null; echo "   xclip -i rc=$?"
+printf 'EVIL-PAYLOAD' | { command -v wl-copy >/dev/null && wl-copy; } 2>/dev/null; echo "   (wl-copy present? $(command -v wl-copy || echo no))"
+```
+
+**Expected:** the write no-ops (rc 0, nothing sent host-ward); **verify on the HOST that your clipboard
+still holds `CCVM-CLIP-SECRET-PENTEST`, not `EVIL-PAYLOAD`.** **FAIL = High** if the host clipboard is
+overwritten from the guest (an agent could swap a copied `curl … | sh` under the user).
+
+### 6.5 No pivot, no forward abuse, loopback-only
+
+```bash
+echo "-- (a) the reverse-forwarded port maps ONLY to the clipboard server, not a generic host proxy --"
+echo "   arbitrary/HTTP request yields only reader behavior (empty), not a tunnel to host services:"
+clipreq 'GET / HTTP/1.0' 2>/dev/null | head -c 60; echo " <<end"
+echo "-- (b) the agent has no creds to open its OWN forward back to the host --"
+ls -la ~/.ssh 2>&1 | head -2
+timeout 6 ssh -o BatchMode=yes -o ConnectTimeout=4 -R 7777:127.0.0.1:22 ccvm@10.0.2.2 true 2>&1 | tr -d '\r' | head -2
+echo "-- (c) the bridge listener is loopback-only (not 0.0.0.0) --"
+{ command -v ss >/dev/null && ss -tlnH 2>/dev/null | grep ":$CLIP_PORT "; } || awk -v p=$CLIP_PORT 'NR>1{split($2,a,":"); if (strtonum("0x" a[2])==p) print $0}' /proc/net/tcp 2>/dev/null | head -1 || echo "   (no introspection tool; the §6.1 connect test already proves reachability)"
+```
+
+**Expected:** (a) `GET /` returns **nothing** (the reader matches only `TARGETS`/`image/*`, everything
+else → empty — it is not an HTTP/byte proxy); (b) no `~/.ssh` key and the outbound `ssh -R … 10.0.2.2`
+**fails to authenticate** (and under egress hardening `10.0.2.2` is BLOCKED outright per §2), so the
+agent cannot create new forwards; (c) the listener is bound to `127.0.0.1` only. **FAIL = High** if the
+port proxies arbitrary traffic to the host, if the agent can open a forward, or if the listener is on
+`0.0.0.0`.
+
+### 6.6 Not an egress bypass
+
+The bridge reaches only `127.0.0.1:9180` (loopback, always allowed) and yields only clipboard images;
+it does **not** widen network reach. Cross-check against §2 if `egress-enforce = 1`: `10.0.2.2` and all
+non-allowlisted hosts must still be **BLOCKED**. **FAIL = High** if the clipboard path lets you reach
+anything the egress firewall otherwise drops.
+
+---
+
+## 7. Free-form red-teaming (go beyond the script)
 
 Spend remaining effort trying to break the model, e.g.: exfiltrate the in-VM `/login` token under the
 allowlist (should be blocked by §2); reach a host loopback service via `10.0.2.2`; persist data across
@@ -258,7 +385,7 @@ that works.
 
 ---
 
-## 7. Report format
+## 8. Report format
 
 Produce:
 
@@ -267,7 +394,9 @@ Produce:
 - **Invariant checklist** — one line each: seed-no-secret, host-key-pin, only-CWD, 9p nosuid/nodev,
   LUKS key-gone, egress-allowed-reachable, egress-blocked-dropped, host-loopback-blocked,
   DNS-confined, **S-1 trusted-user-blocked**, D-1 settings-writable, sysctls-applied,
-  rw-ownership-correct — each ✓/✗ with a one-line note.
+  rw-ownership-correct, **clip-text-never-crosses**, clip-no-host-write, clip-no-pivot/forward-abuse,
+  clip-not-egress-bypass (and note clip-image-residual as documented, not a finding) — each ✓/✗ with a
+  one-line note.
 - **Regressions vs. the prior audit** — call out explicitly if 3b (S-1) or §1/§2 now behave worse.
 
 Cite the commit you tested against (`git rev-parse --short HEAD`) so results are reproducible.

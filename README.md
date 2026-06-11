@@ -120,6 +120,7 @@
   - `nix.trustedPublicKeys`: public keys that verify paths from `nix.substituters` (default: `[]`) (types: list of strings)
   - `share.gitConfig`: stage a sanitized copy of your global git config so in-VM `git` commits as you (no credentials/signing keys cross) (default: `true`) (types: `true`/`false`)
   - `persistClaudeProjects`: mount `~/.claude/projects` read-write so transcripts + memory persist back (cross-run `--resume`); scoped to `projects/` only — nothing else under `~/.claude` is writable (default: `false`) (types: `true`/`false`)
+  - `clipboard.images`: make Ctrl+V **image paste** work inside the VM (like native `claude`) by bridging the host clipboard image over the existing SSH connection — image-only, so host clipboard *text* never crosses, and it opens no new network hole (default: `true`) (types: `true`/`false`)
   - `egressAllowlist`: FQDN/IP/CIDR egress allowlist — empty = open egress, non-empty = default-deny firewall (default: `[]`) (types: list of strings)
   - `egressPorts`: destination ports the allowlist permits (default: `[ 443 ]`) (types: list of ports)
   - `agentSudo`: whether the in-VM agent gets passwordless root (sudo); `null` (default) = auto — on for DevEx and `--shell` debugging, but automatically **off** when `egressAllowlist` is set so a compromised agent can't flush the in-guest egress firewall to exfiltrate; `true`/`false` force it (default: `null`) (types: `null`, or `true`/`false`)
@@ -141,6 +142,7 @@
   - `CCVM_SHARE_CLAUDE_CONFIG` == back-compat: `0` or `1` toggles all claude `share.*` items at once; per-item vars win
   - `CCVM_SHARE_GIT_CONFIG` == `share.gitConfig`
   - `CCVM_PERSIST_PROJECTS` == `persistClaudeProjects`
+  - `CCVM_CLIPBOARD_IMAGES` == `clipboard.images` (only `0` honored — disables image paste for the run)
   - `CCVM_CLAUDE_MD` == `extraClaudeMd`
   - `CCVM_MLOCK` == `lockGuestMemory`
   - `CCVM_VM_DISK_SIZE` == `vmDiskSize`
