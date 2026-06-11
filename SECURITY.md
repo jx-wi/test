@@ -6,7 +6,9 @@ boundary, so security reports are very welcome.
 This file is the researcher-facing summary: how to report, and what is in and out of scope. The
 **authoritative, detailed threat model** — the trust boundary, every security invariant, and the
 rationale behind the settled trade-offs — lives in [CLAUDE.md](CLAUDE.md) ("Security invariants —
-MUST NOT regress" and the default-posture / "Egress" sections).
+MUST NOT regress" and the default-posture / "Egress" sections). To reproduce the verification
+yourself, a runnable pentest / regression playbook lives in
+[`tests/security-reverification.md`](tests/security-reverification.md).
 
 ## Reporting a vulnerability
 
