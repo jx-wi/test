@@ -35,11 +35,16 @@
   ccvm
   ```
 
-  Just want to try it, without installing anything? With Nix (flakes enabled):
+  Just want to try it, without installing anything? With Nix and flakes enabled:
 
   ```bash
   nix run github:jx-wi/ccvm
   ```
+
+  > [!NOTE]
+  > No Nix yet? Install it with the [official installer](https://nixos.org/download/), then
+  > enable flakes once by adding `experimental-features = nix-command flakes` to
+  > `~/.config/nix/nix.conf`.
 
   > [!NOTE]
   > The first run builds the VM image, so it takes a few minutes; after that it's cached and
