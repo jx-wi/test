@@ -489,6 +489,12 @@ reopening one needs a *new* reason, not a rediscovery of the old trade-off.
   `-device` args going through it.
 - **`ssh -tt` adds a PTY**, so guest stdout gets `\r` and escape sequences. When grepping
   captured guest output, use `grep -a` and `tr -d '\r'` or matches silently fail.
+- **The guest interactive shell is zsh, which has no `/dev/tcp`.** Any in-guest TCP-connect probe
+  (egress checks against the allowlist, the clipboard-bridge `127.0.0.1:9180` reader — e.g. the
+  ones in `tests/security-reverification.md`) relies on bash's `/dev/tcp` pseudo-device; under the
+  guest's zsh it fails with `no such file or directory` and *falsely* reads as BLOCKED/dead. Wrap
+  such probes in `bash -c`. Test artifact only — the real clipboard shims are bash scripts
+  (`writeShellScriptBin`), so they hit `/dev/tcp` fine.
 - **9p `msize` is negotiated DOWN.** `guest/launcher.nix` requests `msize=1048576` (1 MiB), but
   QEMU's virtio-9p caps the *effective* value (≈`512000` in practice — `grep msize /proc/mounts`).
   Harmless (the request is clamped, not rejected), but don't trust the requested number when

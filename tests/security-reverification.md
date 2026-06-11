@@ -16,6 +16,14 @@ agent. Out of scope: a malicious guest *kernel*. Severities: **Critical** = brea
 invariant or exposes host creds/keys; **High** = weakens one (e.g. defeats the egress allowlist);
 **Medium** = rough edge; **Low** = polish.
 
+> **Run the `/dev/tcp` probes through `bash`.** The TCP-connect probes below (the §2 egress
+> `probe()` and the §6 `clipreq()`) rely on bash's `/dev/tcp` pseudo-device. The guest's
+> interactive shell is **zsh**, which has **no `/dev/tcp` builtin** — under zsh those probes fail
+> with `no such file or directory` and falsely read as "BLOCKED"/"dead", a *test artifact, not a
+> finding*. Run them in a `bash -lc '…'` (or paste into a `bash` shell); the snippets here already
+> wrap the probe in `bash -c`. The real guest clipboard shims are bash scripts, so they are
+> unaffected — this caveat is only about *your* hand-run probes.
+
 ---
 
 ## 0. Orientation — detect the running posture
