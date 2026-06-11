@@ -34,7 +34,9 @@ way. The VM being the boundary is what makes `--dangerously-skip-permissions` sa
 invariants below stop the *host* from being **persisted to or having its credentials written to
 disk** — they do **not** sandbox what a prompt-injected agent can **read and send**. With the
 native-mirroring defaults (open egress + `share.*` allowlist on), the in-VM agent can read the
-whole project tree and **exfiltrate it over open egress**. What it can NO LONGER read is the
+whole project tree and **exfiltrate it over open egress** (and, with `clipboard.images` on, pull
+the host clipboard *image* — never its text — into that same exfiltratable set; see "Image paste").
+What it can NO LONGER read is the
 host's OAuth login: the `share.*` allowlist stages only settings/commands/memory, and the
 credential is **excluded by construction** (it is simply not a `share.*` item and thus never
 reaches the seed at all), so claude starts unauthenticated and the user's own in-VM `/login` or
@@ -199,6 +201,47 @@ user-facing docs — under-stating it is the one thing that turns a sandbox into
   `--read-only-cwd`, `--ccvm-help`, `--ccvm-version`. They are deliberately ccvm-specific
   names (none is a claude flag), so bare `--help`/`--version` still reach claude.
   Preserve that interception boundary.
+
+- **Image paste — an image-only reverse clipboard bridge (`clipboard.images`, default-on).**
+  Claude Code reads pasted images by shelling out to `xclip`/`wl-paste`
+  (`xclip -selection clipboard -t image/png -o`, `wl-paste --type image/png`, detect via
+  `… -t TARGETS -o` / `wl-paste -l`). The guest has no X/Wayland and no view of the host
+  clipboard, so out of the box Ctrl+V image paste **silently no-ops** — a real DevEx loss.
+  ccvm restores it **without** opening any new attack surface by routing claude's clipboard
+  command back to the host over the channel that already exists — the management SSH connection:
+    1. **Guest shims.** Fake `xclip`/`wl-paste` on the guest PATH (`guest/default.nix`,
+       `pkgs.writeShellScriptBin`, gated on `cfg.clipboard.images`). They connect to a fixed
+       guest-loopback port (`cfg.clipboard.port`, 9180), send a one-word request
+       (`TARGETS`/`image/png`/`image/bmp`) and stream the reply to stdout — mimicking real xclip.
+    2. **Reverse tunnel.** The wrapper's `ssh -tt` gains `-R 127.0.0.1:9180:127.0.0.1:<hostport>`.
+       sshd is `AllowTcpForwarding = "remote"` (only when the bridge is on) **pinned by
+       `PermitListen 127.0.0.1:9180`** — exactly one reverse forward to one loopback port; no
+       local/dynamic forwarding, and forwarding is a *client*-requested feature, so the in-guest
+       agent can't set up its own.
+    3. **Host server.** A `socat` listener (a wrapper `runtimeInput`; zero host setup) the wrapper
+       starts before connecting. Per request it runs the **host's** `wl-paste`/`xclip` for
+       **image targets only** and returns the bytes. The reader's `case` arms are literal image
+       MIME types, so a guest request can neither widen to `text/*` nor inject a command.
+  **Why this doesn't weaken the boundary (be precise):** the bridge rides **loopback +
+  the established SSH connection** (`oifname lo accept` + `ct state established`), so it punches
+  **zero holes** in the egress firewall and works identically under open *and* hardened egress; a
+  prompt-injected agent can't repurpose the one pinned forward to reach anything but the host
+  clipboard-image server. It is **image-only, enforced host-side** — the server never reads
+  `text/plain`, and the shims never *write* the host clipboard — so host clipboard **text** (where
+  passwords/tokens live) **never crosses**. That makes it **strictly less** clipboard exposure than
+  *native* `claude` (where the agent reads clipboard text *and* images at will). The one honest
+  residual, consistent with the documented default posture: under **open egress** a prompt-injected
+  agent can *pull* whatever **image** is on the host clipboard at any time (not just on the user's
+  paste — the host can't see the Ctrl+V keystroke, so it's pull-on-demand) and exfiltrate it — the
+  same class as "the project tree is exfiltratable under open egress," and still less than native.
+  Under hardened egress it can read the image but can't send it off-box. The bridge is **inert**
+  when the host has no `wl-paste`/`xclip` (the guest shims' connect just fails → paste no-ops) and
+  when the build flag is off (no shims, sshd forwarding stays the hardened `no`). Build-time installs
+  the guest half; the per-run `CCVM_CLIPBOARD_IMAGES=0` can only **disable** the wrapper-side wiring
+  (it can't conjure the missing guest shims/sshd rule on), so re-enabling needs the built default.
+  The security-critical image-only guarantee is regression-tested against the **real** reader
+  extracted from the wrapper (`tests/clipboard.sh`, the `clipboard` flake check) — no VM needed.
+  macOS host is future (its image clipboard needs `osascript`/`pngpaste`, not `pbpaste`).
 
 ## Why it's built this way (settled decisions — don't relitigate)
 

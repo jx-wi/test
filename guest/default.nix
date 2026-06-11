@@ -81,6 +81,61 @@ let
     fi
     exit 0   # ALWAYS fail-open: never fail the unit, never block boot
   '';
+
+  # Image-paste shims (cfg.clipboard.images). Claude Code reads clipboard images by shelling out to
+  # `xclip`/`wl-paste`; the guest has no X/Wayland and no view of the host clipboard, so paste
+  # silently no-ops. These fakes service ONLY an image PASTE: they connect to the guest-loopback
+  # port the wrapper reverse-forwards to a host clipboard server and stream back the host clipboard
+  # IMAGE — exactly mimicking real `xclip -t image/png -o` / `wl-paste --type image/png`. They never
+  # read host clipboard TEXT and never WRITE the host clipboard (so passwords/tokens can't cross and
+  # text paste falls through to the terminal's bracketed-paste path), and they are inert when the
+  # wrapper hasn't wired the tunnel (the connect just fails -> "no image"). bash for /dev/tcp.
+  # See CLAUDE.md, "Image paste". The port is interpolated here so it can't drift from sshd/wrapper.
+  clipPort = toString cfg.clipboard.port;
+  clipXclip = pkgs.writeShellScriptBin "xclip" ''
+    target=""; mode=out
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -t|-target) target="$2"; shift 2 ;;
+        -t*) target="''${1#-t}"; shift ;;
+        -o|-out) mode=out; shift ;;
+        -i|-in|-f|-filter) mode=in; shift ;;
+        *) shift ;;
+      esac
+    done
+    [ "$mode" = out ] || exit 0   # never write the host clipboard
+    case "$target" in
+      TARGETS) req=TARGETS ;;
+      image/png|image/bmp|image/jpeg|image/gif|image/webp) req="$target" ;;
+      *) exit 1 ;;                # text/plain etc. — never crosses
+    esac
+    if ! { exec 3<>/dev/tcp/127.0.0.1/${clipPort}; } 2>/dev/null; then exit 1; fi
+    printf '%s\n' "$req" >&3
+    cat <&3
+  '';
+  clipWlPaste = pkgs.writeShellScriptBin "wl-paste" ''
+    target=""; list=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -l|--list-types) list=1; shift ;;
+        -t|--type) target="$2"; shift 2 ;;
+        --type=*) target="''${1#*=}"; shift ;;
+        -p|--primary) exit 0 ;;   # primary selection not bridged
+        -n|--no-newline|--paste-once|-w|--watch) shift ;;
+        *) shift ;;
+      esac
+    done
+    if [ "$list" = 1 ]; then req=TARGETS
+    else
+      case "$target" in
+        image/png|image/bmp|image/jpeg|image/gif|image/webp) req="$target" ;;
+        *) exit 1 ;;              # bare invocation (text) / non-image — never crosses
+      esac
+    fi
+    if ! { exec 3<>/dev/tcp/127.0.0.1/${clipPort}; } 2>/dev/null; then exit 1; fi
+    printf '%s\n' "$req" >&3
+    cat <&3
+  '';
 in
 {
   imports = [
@@ -146,6 +201,28 @@ in
         type = lib.types.listOf lib.types.str;
         default = [ ];
         description = "Public keys verifying paths from `substituters` (name:base64key). Appended to nixpkgs' built-in keys.";
+      };
+    };
+    clipboard = {
+      images = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Install the image-paste shims (a fake `xclip`/`wl-paste`) and let sshd accept the single
+          reverse port-forward they ride, so Claude Code's Ctrl+V image paste pulls the host
+          clipboard IMAGE over the existing SSH channel. Resolved from programs.ccvm.clipboard.images
+          by the wrapper (default ON). The shims are inert unless the wrapper actually wires the
+          tunnel + host clipboard server at launch, so this is safe to leave on. Image-only by
+          construction: host clipboard TEXT never crosses (see CLAUDE.md, "Image paste").
+        '';
+      };
+      port = lib.mkOption {
+        type = lib.types.port;
+        default = 9180;
+        description = ''
+          Guest-loopback port the image-paste shims connect to and that sshd's PermitListen pins the
+          reverse forward to. Internal; the wrapper bakes this value so the three sides can't drift.
+        '';
       };
     };
   };
@@ -422,6 +499,9 @@ in
         vim
       ])
       ++ lib.optional (cfg.claudePackage != null) cfg.claudePackage
+      # Image-paste shims: a fake xclip/wl-paste that bridge the host clipboard IMAGE over the SSH
+      # reverse tunnel (image-only; never host text). Inert unless the wrapper wires the tunnel.
+      ++ lib.optionals cfg.clipboard.images [ clipXclip clipWlPaste ]
       ++ cfg.extraPackages;
 
     # HTTPS to api.anthropic.com et al.

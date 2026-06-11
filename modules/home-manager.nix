@@ -13,7 +13,7 @@ let
   ccvmPkg = (mkCcvm {
     inherit (cfg)
       package writableCwd memory cores acceleration extraPackages
-      apiKeyVariable share persistClaudeProjects extraClaudeMd
+      apiKeyVariable share persistClaudeProjects clipboard extraClaudeMd
       agentSudo lockGuestMemory vmDiskSize egressAllowlist egressPorts extraGuestModules
       # programs.ccvm.nix.{enable,substituters,trustedPublicKeys} passes straight through — the
       # internal config and the guest use the SAME nested `nix` name (no nixInVm mapping anymore).
@@ -271,6 +271,31 @@ in
         credential (~/.claude/.credentials.json, at the ~/.claude ROOT, not under projects/) is
         never staged and never in this share, so it is still never written back to the host.
         Per-run override: CCVM_PERSIST_PROJECTS=0|1.
+      '';
+    };
+
+    clipboard.images = lib.mkOption {
+      type = lib.types.bool;
+      default = defaults.clipboard.images;
+      description = ''
+        true (default): make Claude Code's Ctrl+V IMAGE paste work inside the VM, like native
+        `claude`. Claude reads clipboard images by shelling out to `xclip`/`wl-paste`; the guest has
+        no X/Wayland and no view of the host clipboard, so without this paste silently no-ops. ccvm
+        bridges it by reverse-forwarding a single guest-loopback port back over the EXISTING SSH
+        channel to a tiny host clipboard server (a `socat` listener the wrapper starts); fake
+        in-guest `xclip`/`wl-paste` shims fetch the host clipboard IMAGE through it. Security: the
+        bridge rides loopback + the established SSH connection, so it opens NO hole in the egress
+        firewall and works under hardened egress too; sshd permits only this one reverse forward
+        (AllowTcpForwarding=remote + PermitListen). It is IMAGE-ONLY by construction — the host
+        server never reads clipboard TEXT and the shims never WRITE the host clipboard — so host
+        clipboard text (passwords/tokens) can never cross; this is strictly LESS clipboard exposure
+        than native `claude`, where the agent can read clipboard text and images at will. The one
+        honest residual under OPEN egress: a prompt-injected agent can pull whatever IMAGE is on the
+        host clipboard at any time and exfiltrate it (same class as the project tree). It is inert
+        unless a host clipboard tool (`wl-paste`/`xclip`) is present; if none is found the bridge
+        simply stays off. Build-time (installs the shims + sshd rule); the per-run env var can only
+        DISABLE it (CCVM_CLIPBOARD_IMAGES=0) — re-enabling needs the built-in default. false: no
+        shims, sshd forwarding stays fully off. See CLAUDE.md, "Image paste".
       '';
     };
 

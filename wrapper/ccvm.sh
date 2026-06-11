@@ -35,6 +35,8 @@ EGRESSALLOW="@EGRESSALLOW@" # space-separated FQDN/IP/CIDR allowlist; empty = op
 EGRESSPORTS="@EGRESSPORTS@" # space-separated dst ports the allowlist permits (default 443)
 VERSION="@VERSION@"         # ccvm's own version string (baked from lib/mkccvm.nix)
 VMDISKSIZE="@VMDISKSIZE@"   # GiB; 0=off. >0 attaches an encrypted ephemeral disk pool (/scratch, …)
+CLIPIMAGES="@CLIPIMAGES@"   # 1 = image-paste bridge built into the guest (shims + sshd reverse-fwd); 0 = off
+CLIPGUESTPORT="@CLIPGUESTPORT@" # guest-loopback port the image-paste shims use (matches sshd PermitListen)
 
 # ---- helpers ---------------------------------------------------------------
 warn() { printf 'ccvm: %s\n' "$*" >&2; }
@@ -77,6 +79,7 @@ flag wins over the env var):
   CCVM_SHARE_CLAUDE_CONFIG=0|1  deprecated: toggle all claude items at once (use per-item vars)
   CCVM_PERSIST_PROJECTS=0|1     persist ~/.claude/projects (resume + memory) to the host
   CCVM_SHARE_GIT_CONFIG=0|1     stage a sanitized host git config into the guest
+  CCVM_CLIPBOARD_IMAGES=0       disable image paste for this run (image-only host->guest bridge)
   CCVM_CLAUDE_MD=<file>         alternate ccvm-context CLAUDE.md (empty disables it)
   CCVM_MLOCK=0|1                lock guest RAM so it can't reach host swap
   CCVM_MEMORY=<MiB>             guest RAM for this run
@@ -132,6 +135,8 @@ cleanup() {
   # Stop the boot spinner / debug log tail first so neither outlives us (e.g. Ctrl-C mid-boot).
   if [[ -n ${SPINNER_PID:-} ]]; then kill "$SPINNER_PID" 2>/dev/null || true; fi
   if [[ -n ${TAILPID:-} ]]; then kill "$TAILPID" 2>/dev/null || true; fi
+  # Stop the host clipboard-image server (image-paste bridge), if it was started.
+  if [[ -n ${CLIP_PID:-} ]]; then kill "$CLIP_PID" 2>/dev/null || true; fi
   # Tear down the VM: ask politely, then insist. Freeing qemu discards all guest RAM,
   # which is the entire ephemeral story — there is no disk state to clean up.
   if [[ -n ${QEMU_PID:-} ]] && kill -0 "$QEMU_PID" 2>/dev/null; then
@@ -311,6 +316,15 @@ esac
 case "${CCVM_MLOCK:-}" in
   1 | true | yes) MEMLOCK=1 ;;
   0 | false | no) MEMLOCK=0 ;;
+esac
+
+# Image-paste bridge precedence: CCVM_CLIPBOARD_IMAGES can DISABLE it for one run (the guest
+# half — the shims + the sshd reverse-forward rule — is baked at build time, so the env var can
+# only turn the wrapper-side wiring OFF, never conjure the missing guest pieces ON). Setting it to
+# 1 when the guest was built without the bridge does nothing useful (no listener, sshd would refuse
+# the forward), so we honour only the disable direction here.
+case "${CCVM_CLIPBOARD_IMAGES:-}" in
+  0 | false | no) CLIPIMAGES=0 ;;
 esac
 
 # VM-disk precedence: CCVM_VM_DISK_SIZE overrides the baked vmDiskSize for one run. A positive
@@ -852,6 +866,69 @@ if [[ -n ${TAILPID:-} ]]; then
   TAILPID=""
 fi
 
+# ---- image-paste bridge (clipboard.images) ---------------------------------
+# Claude Code reads clipboard images by shelling out to xclip/wl-paste, which the guest can't run.
+# We restore it by reverse-forwarding a single guest-loopback port (CLIPGUESTPORT) back over THIS
+# ssh connection to a tiny host clipboard server: the in-guest shims connect to that port, the
+# server reads the HOST clipboard image and streams it back. Security properties (see CLAUDE.md,
+# "Image paste"): it rides loopback + the established SSH channel, so it punches NO hole in the
+# egress firewall (works under hardened egress too); sshd permits only this one reverse forward
+# (PermitListen). The server is IMAGE-ONLY — it never reads clipboard text — so host clipboard text
+# (passwords/tokens) can't cross; this is strictly less exposure than native `claude`.
+SSH_FWD_ARGS=()
+if [[ $CLIPIMAGES == 1 ]]; then
+  # Detect a HOST clipboard tool (the user's own xclip/wl-paste talking to their X/Wayland session,
+  # found on the inherited PATH). No tool -> leave the bridge off; the guest shims then just fail to
+  # connect and paste no-ops, exactly as before. Prefer the session's native protocol.
+  CLIP_KIND="" CLIP_TOOL=""
+  if [[ -n ${WAYLAND_DISPLAY:-} ]] && CLIP_TOOL="$(command -v wl-paste 2>/dev/null)"; then CLIP_KIND=wl
+  elif [[ -n ${DISPLAY:-} ]] && CLIP_TOOL="$(command -v xclip 2>/dev/null)"; then CLIP_KIND=x
+  elif CLIP_TOOL="$(command -v wl-paste 2>/dev/null)"; then CLIP_KIND=wl
+  elif CLIP_TOOL="$(command -v xclip 2>/dev/null)"; then CLIP_KIND=x
+  fi
+  if [[ -n $CLIP_KIND ]]; then
+    # Per-connection reader: read one request line from the guest shim (TARGETS | image/<type>) and
+    # answer with the host clipboard IMAGE bytes. The case arms are literal, so the guest can never
+    # widen this to text/* or inject a command — only the fixed image targets reach the tool. $1/$2
+    # are the kind + absolute tool path passed by socat's EXEC below.
+    CLIP_READER="$TMP/clip-reader"
+    cat >"$CLIP_READER" <<'CLIPEOF'
+#!/bin/sh
+kind="$1"; tool="$2"
+IFS= read -r req || exit 0
+case "$req" in
+  TARGETS)
+    case "$kind" in
+      wl) "$tool" -l 2>/dev/null ;;
+      x)  "$tool" -selection clipboard -t TARGETS -o 2>/dev/null ;;
+    esac | grep -iE 'image/(png|jpe?g|gif|webp|bmp)' || true
+    ;;
+  image/png|image/bmp|image/jpeg|image/gif|image/webp)
+    case "$kind" in
+      wl) "$tool" --type "$req" 2>/dev/null ;;
+      x)  "$tool" -selection clipboard -t "$req" -o 2>/dev/null ;;
+    esac
+    ;;
+  *) exit 0 ;;   # never serve text/* or anything outside the image allowlist
+esac
+CLIPEOF
+    chmod 0700 "$CLIP_READER"
+    if CLIP_HOSTPORT="$(pick_port)"; then
+      # Listen on host loopback; fork a reader per connection. Bound to 127.0.0.1, so nothing off
+      # the host can reach it; the guest reaches it only via the pinned reverse forward below.
+      socat "TCP-LISTEN:$CLIP_HOSTPORT,bind=127.0.0.1,reuseaddr,fork" \
+        "EXEC:$CLIP_READER $CLIP_KIND $CLIP_TOOL" >/dev/null 2>&1 &
+      CLIP_PID=$!
+      SSH_FWD_ARGS+=(-o "ExitOnForwardFailure=no"
+        -R "127.0.0.1:$CLIPGUESTPORT:127.0.0.1:$CLIP_HOSTPORT")
+    else
+      warn "image paste: no free host port for the clipboard bridge; paste disabled this run"
+    fi
+  elif [[ ${DEBUG:-0} == 1 ]]; then
+    warn "image paste: no host clipboard tool (wl-paste/xclip) found; paste bridge off"
+  fi
+fi
+
 # ---- connect (FOREGROUND — never exec, so the trap can tear down the VM) ----
 ssh -tt -p "$PORT" -i "$TMP/id" \
   -o UserKnownHostsFile="$TMP/known_hosts" \
@@ -859,6 +936,7 @@ ssh -tt -p "$PORT" -i "$TMP/id" \
   -o SendEnv="$APIKEYVAR" \
   -o LogLevel=ERROR \
   -o ConnectTimeout=5 \
+  "${SSH_FWD_ARGS[@]}" \
   ccvm@127.0.0.1
 RC=$?
 

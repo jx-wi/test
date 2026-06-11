@@ -31,6 +31,9 @@
     config = false; # ~/.claude/config/
   };
   persistClaudeProjects = false; # persist ~/.claude/projects back to the host (resume + memory)
+  clipboard = {
+    images = true; # bridge host clipboard IMAGES into the VM so Ctrl+V image paste works (image-only, never host text). Per-run: CCVM_CLIPBOARD_IMAGES
+  };
   extraClaudeMd = builtins.readFile ./ccvm-context.md; # guest ~/.claude/CLAUDE.md ("you're in ccvm")
   agentSudo = null; # null=auto: passwordless root in the guest, but DROPPED when egressAllowlist is set (so the agent can't `nft flush` the in-guest egress firewall). true/false forces it. Resolved in mkccvm.nix
   lockGuestMemory = false; # mlock guest RAM so it can't reach host swap

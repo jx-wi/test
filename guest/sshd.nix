@@ -26,12 +26,19 @@ in
       # Receive the Anthropic API key over the encrypted channel only (never argv/disk).
       AcceptEnv = [ cfg.apiKeyVariable ];
       X11Forwarding = false;
-      AllowTcpForwarding = false;
+      # Remote (-R) forwarding ONLY when the image-paste bridge is on, and even then pinned by
+      # PermitListen (below) to the single clipboard loopback port. "remote" still forbids local
+      # (-L) and dynamic (-D) forwarding, and forwarding is a CLIENT-requested feature — only the
+      # key-holding wrapper can request the tunnel, never the in-guest agent. Bridge off => the
+      # original hardened "no". See CLAUDE.md, "Image paste".
+      AllowTcpForwarding = if cfg.clipboard.images then "remote" else "no";
       AllowAgentForwarding = false;
     };
     extraConfig = ''
       HostKey /etc/ssh/ssh_host_ed25519_key
       ForceCommand ${cfg.launcherPackage}/bin/ccvm-guest-launch
+    '' + lib.optionalString cfg.clipboard.images ''
+      PermitListen 127.0.0.1:${toString cfg.clipboard.port}
     '';
   };
 

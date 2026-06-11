@@ -45,6 +45,8 @@ let
           "@VERSION@"
           "@VMDISKSIZE@"
           "@ACCELERATION@"
+          "@CLIPIMAGES@"
+          "@CLIPGUESTPORT@"
         ]
         [
           "/dev/null" # KERNEL    } never read: the dry-run hook exits before boot.
@@ -76,6 +78,8 @@ let
           "0.0.0-test" # VERSION (fixture; host.sh asserts --ccvm-version echoes it)
           "0" # VMDISKSIZE (0 = no disk, the default; host.sh opts in via CCVM_VM_DISK_SIZE)
           "auto" # ACCELERATION (default mode; host.sh drives modes via CCVM_ACCEL + CCVM_KVM_DEV)
+          "1" # CLIPIMAGES (production default: clipboard.images=true)
+          "9180" # CLIPGUESTPORT (guest-loopback port for the image-paste shims)
         ]
         (builtins.readFile ../wrapper/ccvm.sh);
     };
@@ -107,6 +111,19 @@ in
       export CCVM=${egressWrapper}/bin/ccvm
       export CCVM_FQDNONLY=${egressFqdnWrapper}/bin/ccvm
       bash ${./egress.sh}
+      touch "$out"
+    '';
+
+  # Image-paste bridge: assert the IMAGE-ONLY guarantee against the real reader extracted from
+  # the wrapper source (no VM, no socat). See tests/clipboard.sh.
+  clipboard = pkgs.runCommand "ccvm-clipboard-tests"
+    {
+      nativeBuildInputs = [ pkgs.bash pkgs.gnugrep pkgs.coreutils pkgs.gawk ];
+    }
+    ''
+      export WRAPPER_SRC=${../wrapper/ccvm.sh}
+      export GUEST_SRC=${../guest/default.nix}
+      bash ${./clipboard.sh}
       touch "$out"
     '';
 }

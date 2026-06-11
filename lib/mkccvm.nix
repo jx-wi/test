@@ -30,6 +30,7 @@ let
   config = (defaults // userConfig) // {
     nix = defaults.nix // (userConfig.nix or { });
     share = defaults.share // (userConfig.share or { });
+    clipboard = defaults.clipboard // (userConfig.clipboard or { });
   };
 
   # agentSudo resolution. null (the default) = AUTO: keep passwordless root in the guest for DevEx,
@@ -60,6 +61,7 @@ let
           inherit (config) apiKeyVariable extraPackages nix;
           claudePackage = config.package;
           agentSudo = agentSudoEnabled;
+          clipboard.images = config.clipboard.images;
         };
       }
     ]
@@ -114,7 +116,7 @@ let
     (pkgs.writeShellApplication {
     name = "ccvm";
     inherit meta;
-    runtimeInputs = with pkgs; [ qemu coreutils openssh findutils getent git jq ];
+    runtimeInputs = with pkgs; [ qemu coreutils openssh findutils getent git jq socat ];
     text = builtins.replaceStrings
       [
         "@KERNEL@"
@@ -143,6 +145,8 @@ let
         "@VERSION@"
         "@VMDISKSIZE@"
         "@ACCELERATION@"
+        "@CLIPIMAGES@"
+        "@CLIPGUESTPORT@"
       ]
       [
         kernel
@@ -171,6 +175,8 @@ let
         version
         (toString config.vmDiskSize)
         config.acceleration
+        (if config.clipboard.images then "1" else "0")
+        (toString gc.ccvm.clipboard.port)
       ]
       (builtins.readFile ../wrapper/ccvm.sh);
   });
