@@ -293,6 +293,8 @@
   - [X] Encrypted disk support
   - [ ] Authenticated binary cache support
   - [ ] Dedicated CI server for the boot tests
+  - [ ] macOS host support — community-driven (I have no Apple hardware; help from
+    nix-darwin folks or anyone willing to do the porting work would be very welcome)
 
 ---
 
