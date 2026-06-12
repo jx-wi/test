@@ -61,6 +61,11 @@ let
         mapfile -t -d "" args < "$seed/claude-args"
       fi
 
+      # NB: Ctrl+Z freezes the session and there is no guest-side fix — Claude Code reads Ctrl+Z
+      # in raw mode and raises SIGSTOP on ITSELF (the Windows port crashes "Unknown signal:
+      # SIGSTOP"), and SIGSTOP is uncatchable/unignorable, so neither `stty susp undef` nor
+      # `trap "" TSTP` here has any effect (both were tried, removed). See CLAUDE.md gotcha.
+
       # The API key arrived over the encrypted SSH channel (SendEnv -> AcceptEnv) and is
       # already in our environment here; it is never read from the seed or any file.
       # No flags are injected — claude gets exactly the forwarded argv. The VM is the

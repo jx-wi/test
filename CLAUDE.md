@@ -430,6 +430,22 @@ reopening one needs a *new* reason, not a rediscovery of the old trade-off.
   `-device` args going through it.
 - **`ssh -tt` adds a PTY**, so guest stdout gets `\r` and escape sequences. When grepping
   captured guest output, use `grep -a` and `tr -d '\r'` or matches silently fail.
+- **KNOWN LIMITATION: Ctrl+Z freezes the session and there is NO guest-side fix.** claude is
+  `exec`'d as the sshd `ForceCommand` with NO job-control shell behind it, so a stopped claude has
+  nothing to `fg` it: a hard lockout (the VM has no second tty; the only escape, dropping the SSH
+  connection, tears down the whole VM). The cause is upstream Claude Code: it reads Ctrl+Z in raw
+  mode and raises a stop signal **on itself** — specifically `SIGSTOP` (the Windows port crashes
+  with "Unknown signal: SIGSTOP"). `SIGSTOP` is **uncatchable and unignorable**, so guest-side
+  mitigation does not work — `stty susp undef` (terminal SUSP) and `trap "" TSTP` (ignore SIGTSTP)
+  were both tried and had **zero effect** (removed; don't re-add — they only made `tests/boot.sh`
+  pass while the bug persisted). Ctrl+Z is also **not a rebindable keybinding** (the keybindings
+  doc lists it under "Terminal conflicts", not as an action), so `~/.claude/keybindings.json`
+  cannot disable it. Same brick as claudecode.nvim#194; related claude-code#3586/#12483. The only
+  ccvm-side fix would be an **external supervisor that auto-`SIGCONT`s claude whenever it stops**
+  (an outside process *can* continue a SIGSTOP'd child) — **deliberately NOT pursued**: a C helper
+  plus job-control/foreground-pgrp handling is too much machinery for an upstream bug Anthropic may
+  yet make configurable. Documented instead as a user caveat in the README ("Avoid Ctrl+Z").
+  Don't disable `-ixon`/Ctrl+S either — Ctrl+S is a claude keybinding (stash), not a freeze.
 - **The guest interactive shell is zsh, which has no `/dev/tcp`.** Any in-guest TCP-connect probe
   (egress checks against the allowlist, the clipboard-bridge `127.0.0.1:9180` reader — e.g. the
   ones in `tests/security-reverification.md`) relies on bash's `/dev/tcp` pseudo-device; under the

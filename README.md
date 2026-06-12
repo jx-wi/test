@@ -54,6 +54,12 @@
   > ccvm brings your `~/.claude` settings into the VM but not your login, so `/login` on first
   > run (it stays in the VM and is wiped on exit) or set `ANTHROPIC_API_KEY`.
 
+  > [!WARNING]
+  > Avoid pressing **Ctrl+Z** inside ccvm. Claude Code treats it as suspend and stops itself, but
+  > the VM has no shell to bring it back, so the session just freezes. Disconnect and start again
+  > (the VM is ephemeral, so nothing is lost beyond the session). This is upstream Claude Code
+  > behavior, not specific to ccvm.
+
 ---
 
 ## Security
