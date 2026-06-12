@@ -187,7 +187,7 @@
   ```nix
   {
     inputs = {
-      nixpkgs.url = "nixpkgs/nixos-unstable";
+      nixpkgs.url = "nixpkgs/nixos-26.05";
       ccvm = {
         url = "github:jx-wi/ccvm";
         inputs.nixpkgs.follows = "nixpkgs";

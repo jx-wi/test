@@ -299,12 +299,12 @@ reopening one needs a *new* reason, not a rediscovery of the old trade-off.
   kept current independent of the nixpkgs channel. **It only reaches a home-manager consumer
   because `modules/home-manager.nix` closes over the `claude-code` input and applies the overlay
   to the consumer's own `pkgs`** (`pkgs.extend`) — a downstream flake has no view of our inputs
-  otherwise; keep that wiring. The package is still **unfree**, but the community flake hands it
-  over **pre-instantiated** (built in its own `allowUnfree` instance), so a consumer — standalone
-  or home-manager — needs **no** unfree opt-in for it: forcing its `drvPath` under a default-deny
-  `config` does not throw (verified), unlike nixpkgs' own `claude-code` (pname `claude-code`),
-  which does. So no `allowUnfreePredicate` entry is required for it. Its FOD still downloads the
-  prebuilt binary from `storage.googleapis.com` (see the hardened-egress note above).
+  otherwise; keep that wiring. The package is **unfree**, so a *consuming* config must allow it:
+  the README home-manager example's `allowUnfreePredicate` does this, and the entry that works in
+  a real build is **`claude-code`** (verified on a real home-manager activation — `claude` alone
+  is rejected; do not "simplify" it to `claude`). ccvm's own standalone `pkgsFor` sets a blanket
+  `allowUnfree = true`, so `nix run`/the flake needs nothing extra. Its FOD downloads the prebuilt
+  binary from `storage.googleapis.com` (see the hardened-egress note above).
 - **No published binary cache (first-run stays a local build).** Most of the guest closure
   substitutes from `cache.nixos.org`, so first-run is bounded — mostly download + the
   ccvm-specific squashfs/toplevel build (~minutes). The **unfree** `claude-code` path is not on
