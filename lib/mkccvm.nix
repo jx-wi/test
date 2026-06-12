@@ -151,6 +151,7 @@ let
                 "@APIKEYVAR@"
                 "@SHARE_SETTINGS@"
                 "@SHARE_CLAUDEMD@"
+                "@SHARE_KEYBINDINGS@"
                 "@SHARE_COMMANDS@"
                 "@SHARE_AGENTS@"
                 "@SHARE_SKILLS@"
@@ -181,6 +182,7 @@ let
                 config.apiKeyVariable
                 (if config.share.settings then "1" else "0")
                 (if config.share.claudeMd then "1" else "0")
+                (if config.share.keybindings then "1" else "0")
                 (if config.share.commands then "1" else "0")
                 (if config.share.agents then "1" else "0")
                 (if config.share.skills then "1" else "0")

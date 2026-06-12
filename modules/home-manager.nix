@@ -228,6 +228,18 @@ in
         '';
       };
 
+      keybindings = lib.mkOption {
+        type = lib.types.bool;
+        default = defaults.share.keybindings;
+        description = ''
+          true (default): copy the host's ~/.claude/keybindings.json (your custom keyboard
+          shortcuts) into the VM, dereferencing home-manager symlinks, so the in-VM TUI uses
+          your bindings. Staged into the tmpfs ~/.claude, so in-VM writes stay ephemeral. It
+          carries no secrets (just keystroke→action maps). false: the guest uses Claude Code's
+          default bindings. Per-run: CCVM_SHARE_KEYBINDINGS=0|1.
+        '';
+      };
+
       commands = lib.mkOption {
         type = lib.types.bool;
         default = defaults.share.commands;

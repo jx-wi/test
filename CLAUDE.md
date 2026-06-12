@@ -390,13 +390,18 @@ reopening one needs a *new* reason, not a rediscovery of the old trade-off.
   `authored-by`, bare `Claude`, no model name. This intentionally differs from the Claude
   Code CLI default; use *this* form.
 - **Config flows through `@TOKENS@`.** Scalars are baked at build time in `mkccvm.nix`
-  (`@MODE@` = `rw`/`overlay`, `@SHARE_SETTINGS@`/`@SHARE_CLAUDEMD@`/`@SHARE_COMMANDS@`/
-  `@SHARE_AGENTS@`/`@SHARE_SKILLS@`/`@SHARE_PLUGINS@`/`@SHARE_CONFIG@` = `1`/`0`, etc.).
+  (`@MODE@` = `rw`/`overlay`, `@SHARE_SETTINGS@`/`@SHARE_CLAUDEMD@`/`@SHARE_KEYBINDINGS@`/
+  `@SHARE_COMMANDS@`/`@SHARE_AGENTS@`/`@SHARE_SKILLS@`/`@SHARE_PLUGINS@`/`@SHARE_CONFIG@` =
+  `1`/`0`, etc.).
   Values only known at launch — the workspace 9p share and SSH port — are **not** baked;
   the wrapper builds those QEMU args at runtime (the microvm.nix "runtime-share trap").
+  Adding a new `@TOKEN@` means updating BOTH the bake in `mkccvm.nix` AND the stand-in token
+  list in `tests/default.nix` (the host test bakes the wrapper itself, with fixture values) —
+  forget the latter and the token stays literal, which `tests/host.sh` catches as a failure.
 - **Runtime override pattern:** a `CCVM_*` env var overrides the baked default for one run
-  (`CCVM_WRITABLE_CWD`, `CCVM_SHARE_SETTINGS`, `CCVM_SHARE_CLAUDEMD`, `CCVM_SHARE_COMMANDS`,
-  `CCVM_SHARE_AGENTS`, `CCVM_SHARE_SKILLS`, `CCVM_SHARE_PLUGINS`, `CCVM_SHARE_CONFIG`,
+  (`CCVM_WRITABLE_CWD`, `CCVM_SHARE_SETTINGS`, `CCVM_SHARE_CLAUDEMD`, `CCVM_SHARE_KEYBINDINGS`,
+  `CCVM_SHARE_COMMANDS`, `CCVM_SHARE_AGENTS`, `CCVM_SHARE_SKILLS`, `CCVM_SHARE_PLUGINS`,
+  `CCVM_SHARE_CONFIG`,
   `CCVM_MLOCK`, `CCVM_ACCEL`); an explicit `ccvm` flag wins over the env var.
   Back-compat: `CCVM_SHARE_CLAUDE_CONFIG=0|1` toggles all claude items at once; per-item
   vars win over it.

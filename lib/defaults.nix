@@ -24,6 +24,7 @@
     gitConfig = true; # stage a sanitized global git config (was: shareGitConfig)
     settings = true; # ~/.claude/settings.json + settings.local.json
     claudeMd = true; # ~/.claude/CLAUDE.md (global memory)
+    keybindings = true; # ~/.claude/keybindings.json (custom keyboard shortcuts)
     commands = true; # ~/.claude/commands/
     agents = true; # ~/.claude/agents/
     skills = true; # ~/.claude/skills/

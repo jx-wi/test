@@ -41,6 +41,7 @@ let
             "@APIKEYVAR@"
             "@SHARE_SETTINGS@"
             "@SHARE_CLAUDEMD@"
+            "@SHARE_KEYBINDINGS@"
             "@SHARE_COMMANDS@"
             "@SHARE_AGENTS@"
             "@SHARE_SKILLS@"
@@ -71,6 +72,7 @@ let
             "ANTHROPIC_API_KEY" # APIKEYVAR
             "1" # SHARE_SETTINGS    (production default: share.settings=true)
             "1" # SHARE_CLAUDEMD    (production default: share.claudeMd=true)
+            "1" # SHARE_KEYBINDINGS (production default: share.keybindings=true)
             "1" # SHARE_COMMANDS    (production default: share.commands=true)
             "1" # SHARE_AGENTS      (production default: share.agents=true)
             "1" # SHARE_SKILLS      (production default: share.skills=true)
