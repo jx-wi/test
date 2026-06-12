@@ -28,6 +28,7 @@
     commands = true; # ~/.claude/commands/
     agents = true; # ~/.claude/agents/
     skills = true; # ~/.claude/skills/
+    outputStyles = true; # ~/.claude/output-styles/ (custom output styles)
     plugins = false; # ~/.claude/plugins/
     config = false; # ~/.claude/config/
   };

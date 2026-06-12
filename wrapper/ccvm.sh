@@ -19,25 +19,26 @@ APPEND="@APPEND@"
 MEMORY="@MEMORY@"
 CORES="@CORES@"
 APIKEYVAR="@APIKEYVAR@"
-SHARE_SETTINGS="@SHARE_SETTINGS@"       # 1 = stage ~/.claude/settings.json + settings.local.json; 0 = off
-SHARE_CLAUDEMD="@SHARE_CLAUDEMD@"       # 1 = stage ~/.claude/CLAUDE.md (global memory); 0 = off
-SHARE_KEYBINDINGS="@SHARE_KEYBINDINGS@" # 1 = stage ~/.claude/keybindings.json; 0 = off
-SHARE_COMMANDS="@SHARE_COMMANDS@"       # 1 = stage ~/.claude/commands/; 0 = off
-SHARE_AGENTS="@SHARE_AGENTS@"           # 1 = stage ~/.claude/agents/; 0 = off
-SHARE_SKILLS="@SHARE_SKILLS@"           # 1 = stage ~/.claude/skills/; 0 = off
-SHARE_PLUGINS="@SHARE_PLUGINS@"         # 1 = stage ~/.claude/plugins/ (off by default); 0 = off
-SHARE_CONFIG="@SHARE_CONFIG@"           # 1 = stage ~/.claude/config/ (off by default); 0 = off
-PERSISTPROJECTS="@PERSISTPROJECTS@"     # 1 = mount host ~/.claude/projects rw (resume + memory persist); 0 = off
-SHAREGIT="@SHAREGIT@"                   # 1 = stage a sanitized host git config into the guest; 0 = off
-CLAUDEMD="@CLAUDEMD@"                   # path to the baked ccvm-context CLAUDE.md (empty = inject nothing)
-MODE="@MODE@"                           # rw (writableCwd=true, default — mirrors native claude) | overlay (secure)
-MEMLOCK="@MEMLOCK@"                     # 1 = mlock guest RAM (lockGuestMemory) so it can't hit host swap; 0 = off
-EGRESSALLOW="@EGRESSALLOW@"             # space-separated FQDN/IP/CIDR allowlist; empty = open egress (default)
-EGRESSPORTS="@EGRESSPORTS@"             # space-separated dst ports the allowlist permits (default 443)
-VERSION="@VERSION@"                     # ccvm's own version string (baked from lib/mkccvm.nix)
-VMDISKSIZE="@VMDISKSIZE@"               # GiB; 0=off. >0 attaches an encrypted ephemeral disk pool (/scratch, …)
-CLIPIMAGES="@CLIPIMAGES@"               # 1 = image-paste bridge built into the guest (shims + sshd reverse-fwd); 0 = off
-CLIPGUESTPORT="@CLIPGUESTPORT@"         # guest-loopback port the image-paste shims use (matches sshd PermitListen)
+SHARE_SETTINGS="@SHARE_SETTINGS@"         # 1 = stage ~/.claude/settings.json + settings.local.json; 0 = off
+SHARE_CLAUDEMD="@SHARE_CLAUDEMD@"         # 1 = stage ~/.claude/CLAUDE.md (global memory); 0 = off
+SHARE_KEYBINDINGS="@SHARE_KEYBINDINGS@"   # 1 = stage ~/.claude/keybindings.json; 0 = off
+SHARE_COMMANDS="@SHARE_COMMANDS@"         # 1 = stage ~/.claude/commands/; 0 = off
+SHARE_AGENTS="@SHARE_AGENTS@"             # 1 = stage ~/.claude/agents/; 0 = off
+SHARE_SKILLS="@SHARE_SKILLS@"             # 1 = stage ~/.claude/skills/; 0 = off
+SHARE_OUTPUTSTYLES="@SHARE_OUTPUTSTYLES@" # 1 = stage ~/.claude/output-styles/; 0 = off
+SHARE_PLUGINS="@SHARE_PLUGINS@"           # 1 = stage ~/.claude/plugins/ (off by default); 0 = off
+SHARE_CONFIG="@SHARE_CONFIG@"             # 1 = stage ~/.claude/config/ (off by default); 0 = off
+PERSISTPROJECTS="@PERSISTPROJECTS@"       # 1 = mount host ~/.claude/projects rw (resume + memory persist); 0 = off
+SHAREGIT="@SHAREGIT@"                     # 1 = stage a sanitized host git config into the guest; 0 = off
+CLAUDEMD="@CLAUDEMD@"                     # path to the baked ccvm-context CLAUDE.md (empty = inject nothing)
+MODE="@MODE@"                             # rw (writableCwd=true, default — mirrors native claude) | overlay (secure)
+MEMLOCK="@MEMLOCK@"                       # 1 = mlock guest RAM (lockGuestMemory) so it can't hit host swap; 0 = off
+EGRESSALLOW="@EGRESSALLOW@"               # space-separated FQDN/IP/CIDR allowlist; empty = open egress (default)
+EGRESSPORTS="@EGRESSPORTS@"               # space-separated dst ports the allowlist permits (default 443)
+VERSION="@VERSION@"                       # ccvm's own version string (baked from lib/mkccvm.nix)
+VMDISKSIZE="@VMDISKSIZE@"                 # GiB; 0=off. >0 attaches an encrypted ephemeral disk pool (/scratch, …)
+CLIPIMAGES="@CLIPIMAGES@"                 # 1 = image-paste bridge built into the guest (shims + sshd reverse-fwd); 0 = off
+CLIPGUESTPORT="@CLIPGUESTPORT@"           # guest-loopback port the image-paste shims use (matches sshd PermitListen)
 
 # ---- helpers ---------------------------------------------------------------
 warn() { printf 'ccvm: %s\n' "$*" >&2; }
@@ -76,6 +77,7 @@ flag wins over the env var):
   CCVM_SHARE_COMMANDS=0|1       stage ~/.claude/commands/
   CCVM_SHARE_AGENTS=0|1         stage ~/.claude/agents/
   CCVM_SHARE_SKILLS=0|1         stage ~/.claude/skills/
+  CCVM_SHARE_OUTPUTSTYLES=0|1   stage ~/.claude/output-styles/
   CCVM_SHARE_PLUGINS=0|1        stage ~/.claude/plugins/ (off by default)
   CCVM_SHARE_CONFIG=0|1         stage ~/.claude/config/ (off by default)
   CCVM_SHARE_CLAUDE_CONFIG=0|1  deprecated: toggle all claude items at once (use per-item vars)
@@ -283,6 +285,7 @@ case "${CCVM_SHARE_CLAUDE_CONFIG:-}" in
     SHARE_COMMANDS=1
     SHARE_AGENTS=1
     SHARE_SKILLS=1
+    SHARE_OUTPUTSTYLES=1
     SHARE_PLUGINS=1
     SHARE_CONFIG=1
     ;;
@@ -293,6 +296,7 @@ case "${CCVM_SHARE_CLAUDE_CONFIG:-}" in
     SHARE_COMMANDS=0
     SHARE_AGENTS=0
     SHARE_SKILLS=0
+    SHARE_OUTPUTSTYLES=0
     SHARE_PLUGINS=0
     SHARE_CONFIG=0
     ;;
@@ -305,6 +309,7 @@ case "${CCVM_SHARE_KEYBINDINGS:-}" in 1 | true | yes) SHARE_KEYBINDINGS=1 ;; 0 |
 case "${CCVM_SHARE_COMMANDS:-}" in 1 | true | yes) SHARE_COMMANDS=1 ;; 0 | false | no) SHARE_COMMANDS=0 ;; esac
 case "${CCVM_SHARE_AGENTS:-}" in 1 | true | yes) SHARE_AGENTS=1 ;; 0 | false | no) SHARE_AGENTS=0 ;; esac
 case "${CCVM_SHARE_SKILLS:-}" in 1 | true | yes) SHARE_SKILLS=1 ;; 0 | false | no) SHARE_SKILLS=0 ;; esac
+case "${CCVM_SHARE_OUTPUTSTYLES:-}" in 1 | true | yes) SHARE_OUTPUTSTYLES=1 ;; 0 | false | no) SHARE_OUTPUTSTYLES=0 ;; esac
 case "${CCVM_SHARE_PLUGINS:-}" in 1 | true | yes) SHARE_PLUGINS=1 ;; 0 | false | no) SHARE_PLUGINS=0 ;; esac
 case "${CCVM_SHARE_CONFIG:-}" in 1 | true | yes) SHARE_CONFIG=1 ;; 0 | false | no) SHARE_CONFIG=0 ;; esac
 
@@ -572,6 +577,9 @@ if [[ -d $CLAUDEDIR ]]; then
   fi
   if [[ $SHARE_SKILLS == 1 ]]; then
     [[ -d "$CLAUDEDIR/skills" ]] && cp -aL "$CLAUDEDIR/skills" "$CFGOUT/skills" 2>/dev/null || true
+  fi
+  if [[ $SHARE_OUTPUTSTYLES == 1 ]]; then
+    [[ -d "$CLAUDEDIR/output-styles" ]] && cp -aL "$CLAUDEDIR/output-styles" "$CFGOUT/output-styles" 2>/dev/null || true
   fi
   if [[ $SHARE_PLUGINS == 1 ]]; then
     [[ -d "$CLAUDEDIR/plugins" ]] && cp -aL "$CLAUDEDIR/plugins" "$CFGOUT/plugins" 2>/dev/null || true

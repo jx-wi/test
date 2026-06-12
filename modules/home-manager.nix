@@ -267,6 +267,17 @@ in
         '';
       };
 
+      outputStyles = lib.mkOption {
+        type = lib.types.bool;
+        default = defaults.share.outputStyles;
+        description = ''
+          true (default): copy the host's ~/.claude/output-styles/ directory into the VM so your
+          custom output styles are available. The ACTIVE style selection already crosses via
+          share.settings; this brings the style DEFINITIONS it points at. false: no custom output
+          styles (a selected one falls back to a built-in). Per-run: CCVM_SHARE_OUTPUTSTYLES=0|1.
+        '';
+      };
+
       plugins = lib.mkOption {
         type = lib.types.bool;
         default = defaults.share.plugins;

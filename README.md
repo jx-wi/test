@@ -120,7 +120,7 @@
 
   - `enable`: install the `ccvm` command (default: `false`) (types: `true`/`false`)
   - `writableCwd`: mount the host CWD (the project dir `ccvm` was launched in) read-write so the agent's edits land on the host live; `false` keeps the CWD read-only with edits in an ephemeral overlay discarded on exit. Only this one directory ever crosses to the host (default: `true`) (types: `true`/`false`)
-  - `share.settings` / `share.claudeMd` / `share.keybindings` / `share.commands` / `share.agents` / `share.skills`: stage the named item from host `~/.claude` into the VM — your settings, context file, keyboard shortcuts, commands, agents, and skills, but **never** your login credential (excluded by design) (default: `true` for all six) (types: `true`/`false`)
+  - `share.settings` / `share.claudeMd` / `share.keybindings` / `share.commands` / `share.agents` / `share.skills` / `share.outputStyles`: stage the named item from host `~/.claude` into the VM — your settings, context file, keyboard shortcuts, commands, agents, skills, and output styles, but **never** your login credential (excluded by design) (default: `true` for all seven) (types: `true`/`false`)
   - `share.plugins` / `share.config`: opt-in sharing for `~/.claude/plugins` and `~/.claude/config` (default: `false` for both) (types: `true`/`false`)
   - `memory`: how much RAM in MiB to allocate to the VM (default: `4096`) (types: positive integers)
   - `cores`: how many vCPUs to allocate to the VM (default: `4`) (types: positive integers)
