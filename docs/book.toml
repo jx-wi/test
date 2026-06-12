@@ -1,0 +1,30 @@
+[book]
+title = "ccvm"
+description = "Run Claude Code in an ephemeral, RAM-only QEMU microVM with native-terminal fidelity."
+authors = ["Jaxxen"]
+language = "en"
+src = "src"
+
+[output.html]
+# Project pages live under https://<user>.github.io/ccvm/, so the base path is /ccvm/.
+# If the repo is ever renamed, update this and the README badges together.
+site-url = "/ccvm/"
+git-repository-url = "https://github.com/jx-wi/ccvm"
+edit-url-template = "https://github.com/jx-wi/ccvm/edit/main/docs/src/{path}"
+default-theme = "navy"
+preferred-dark-theme = "navy"
+no-section-label = false
+
+[output.html.search]
+enable = true
+
+# Internal-link checking. mdBook's built-in `mdbook build` does NOT fail on dead internal
+# links; the mdbook-linkcheck2 backend does. `optional = false` makes mdBook hard-require the
+# backend binary (so a missing plugin fails the build rather than silently skipping the check),
+# and `warning-policy = "error"` turns any broken link into a build failure — this is what makes
+# `nix build .#docs` / `checks.docs` catch dead links in CI. `follow-web-links = false` keeps the
+# check offline (the Nix sandbox has no network) so only internal links are verified.
+[output.linkcheck2]
+optional = false
+follow-web-links = false
+warning-policy = "error"

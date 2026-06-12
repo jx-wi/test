@@ -1,0 +1,57 @@
+name: pages
+
+# Build the mdBook docs site with Nix (`nix build .#docs`) and deploy it to GitHub Pages.
+# Runs on pushes to main that touch the docs, the flake, or this workflow. The build is the same
+# derivation `nix flake check` gates as `checks.docs`, so a deploy can never ship a site that
+# fails the link check. Enable once in the repo: Settings → Pages → Source: "GitHub Actions".
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+# Least privilege: read the repo, write the Pages artifact + deployment, mint the OIDC token
+# `deploy-pages` needs.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one Pages deploy at a time; a newer push supersedes an in-flight one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      - uses: DeterminateSystems/magic-nix-cache-action@565684385bcd71bad329742eefe8d12f2e765b39 # v13
+        continue-on-error: true
+      - name: build docs site
+        run: nix build .#docs -L
+      - name: stage site (deref the store symlink)
+        # `result` is a symlink into /nix/store; upload-pages-artifact tars the path and would trip
+        # on the store path's read-only perms. Copy to a real dir, dereferencing and dropping the
+        # store's mode/ownership.
+        run: cp -rL --no-preserve=mode,ownership result _site
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
