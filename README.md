@@ -4,7 +4,7 @@
 
 ***100% reproducible from this repository.***
 
-[![check](https://github.com/jx-wi/ccvm/actions/workflows/check.yml/badge.svg)](https://github.com/jx-wi/ccvm/actions/workflows/check.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+[![flake check](https://github.com/jx-wi/ccvm/actions/workflows/flake-check.yml/badge.svg)](https://github.com/jx-wi/ccvm/actions/workflows/flake-check.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
 ---
 

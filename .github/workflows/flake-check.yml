@@ -1,0 +1,32 @@
+name: flake check
+
+# Builds the guest image, shellchecks the wrapper (via writeShellApplication), and runs the
+# host-side guarantee tests (secret hygiene, config staging, verbatim argv, mode selection) —
+# i.e. `nix flake check`. The full-boot smoke test (tests/boot.sh) needs a real VM/KVM and is
+# run locally, not here (see CLAUDE.md → "Definition of done", and the PR template checklist).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # strictest possible
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 (Jan 2026)
+      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22 (Mar 2026)
+      - uses: DeterminateSystems/magic-nix-cache-action@565684385bcd71bad329742eefe8d12f2e765b39 # v13 (Jul 2025)
+        continue-on-error: true
+      - name: nix flake check
+        run: nix flake check -L --show-trace --keep-going
+      - name: build the guest system closure (dry-run)
+        # Not realized by `nix flake check` (which builds the squashfs store + wrapper); this
+        # confirms the full guest toplevel evaluates and its closure is buildable.
+        run: |
+          nix build .#guest-toplevel \
+            --dry-run \
+            --show-trace
