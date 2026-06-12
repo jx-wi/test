@@ -251,13 +251,13 @@
     };
     programs.ccvm = {
       enable = true;
-      acceleration = "kvm";
       cores = 8;
       memory = 8192;
       vmDiskSize = 32;
       nix.enable = true;
       egressAllowlist = [
         "cache.nixos.org"
+        "storage.googleapis.com"
         "github.com"
         "api.github.com"
         "raw.githubusercontent.com"
