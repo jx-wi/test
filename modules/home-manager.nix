@@ -3,22 +3,51 @@
 # Each option feeds lib/mkccvm.nix, which builds a self-contained guest image and bakes
 # it into the wrapper. Changing memory/cores is cheap (runtime QEMU args); changing
 # package/extraPackages/nix.enable rebuilds the guest closure.
-{ config, lib, pkgs, ... }:
+#
+# Exposed from the flake as `import ./modules/home-manager.nix { inherit claude-code; }`, so it
+# closes over the community nix-claude-code flake — a consumer's nixpkgs has no view of our
+# inputs, so we apply claude-code's overlay to *their* pkgs to land the same `pkgs.claude-code`.
+{ claude-code }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 let
   cfg = config.programs.ccvm;
-  mkCcvm = import ../lib/mkccvm.nix { inherit pkgs; };
+  # The consumer's pkgs with the community claude-code overlay applied, so `package` (and the
+  # guest's `pkgs.claude-code`) resolve to the same build the standalone flake uses.
+  pkgs' = pkgs.extend claude-code.overlays.default;
+  mkCcvm = import ../lib/mkccvm.nix { pkgs = pkgs'; };
   # Option defaults come from the SAME source mkccvm.nix uses, so a default can't drift
   # between the two. Only the user-facing descriptions live here.
-  defaults = import ../lib/defaults.nix { inherit pkgs; };
-  ccvmPkg = (mkCcvm {
-    inherit (cfg)
-      package writableCwd memory cores acceleration extraPackages
-      apiKeyVariable share persistClaudeProjects clipboard extraClaudeMd
-      agentSudo lockGuestMemory vmDiskSize egressAllowlist egressPorts extraGuestModules
-      # programs.ccvm.nix.{enable,substituters,trustedPublicKeys} passes straight through — the
-      # internal config and the guest use the SAME nested `nix` name (no nixInVm mapping anymore).
-      nix;
-  }).wrapper;
+  defaults = import ../lib/defaults.nix { pkgs = pkgs'; };
+  ccvmPkg =
+    (mkCcvm {
+      inherit (cfg)
+        package
+        writableCwd
+        memory
+        cores
+        acceleration
+        extraPackages
+        apiKeyVariable
+        share
+        persistClaudeProjects
+        clipboard
+        extraClaudeMd
+        agentSudo
+        lockGuestMemory
+        vmDiskSize
+        egressAllowlist
+        egressPorts
+        extraGuestModules
+        # programs.ccvm.nix.{enable,substituters,trustedPublicKeys} passes straight through — the
+        # internal config and the guest use the SAME nested `nix` name (no nixInVm mapping anymore).
+        nix
+        ;
+    }).wrapper;
 in
 {
   imports = [
@@ -26,7 +55,8 @@ in
     # This rename keeps existing configs working with a deprecation warning.
     (lib.mkRenamedOptionModule
       [ "programs" "ccvm" "shareGitConfig" ]
-      [ "programs" "ccvm" "share" "gitConfig" ])
+      [ "programs" "ccvm" "share" "gitConfig" ]
+    )
   ];
 
   options.programs.ccvm = {
@@ -68,7 +98,11 @@ in
     };
 
     acceleration = lib.mkOption {
-      type = lib.types.enum [ "auto" "kvm" "tcg" ];
+      type = lib.types.enum [
+        "auto"
+        "kvm"
+        "tcg"
+      ];
       default = defaults.acceleration;
       description = ''
         VM CPU acceleration mode.
@@ -408,7 +442,8 @@ in
 
   config = lib.mkIf cfg.enable {
     home.packages = [ ccvmPkg ];
-    warnings = lib.optional (cfg.shareClaudeConfig != null)
-      "programs.ccvm.shareClaudeConfig is deprecated — use programs.ccvm.share.{settings,claudeMd,commands,agents,skills} instead. The per-item share.* options default to the same sensible values. The runtime env var CCVM_SHARE_CLAUDE_CONFIG=0|1 still works as a back-compat toggle for all claude items.";
+    warnings =
+      lib.optional (cfg.shareClaudeConfig != null)
+        "programs.ccvm.shareClaudeConfig is deprecated — use programs.ccvm.share.{settings,claudeMd,commands,agents,skills} instead. The per-item share.* options default to the same sensible values. The runtime env var CCVM_SHARE_CLAUDE_CONFIG=0|1 still works as a back-compat toggle for all claude items.";
   };
 }

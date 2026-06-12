@@ -8,7 +8,12 @@
 #
 #   * ccvm-guest-launch  — the sshd ForceCommand. Reads the seed, cd's to the
 #     workspace, and exec's either zsh (debug) or claude with the forwarded args.
-{ config, lib, pkgs, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 let
   cfg = config.ccvm;
 
@@ -25,7 +30,10 @@ let
 
   launcher = pkgs.writeShellApplication {
     name = "ccvm-guest-launch";
-    runtimeInputs = [ pkgs.coreutils pkgs.zsh ];
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.zsh
+    ];
     text = ''
       seed=/run/ccvm-seed
 
@@ -64,7 +72,17 @@ let
 
   seedSetup = pkgs.writeShellApplication {
     name = "ccvm-seed-setup";
-    runtimeInputs = [ pkgs.coreutils pkgs.util-linux pkgs.shadow pkgs.gnugrep pkgs.nftables pkgs.kmod pkgs.cryptsetup pkgs.e2fsprogs config.systemd.package ];
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.util-linux
+      pkgs.shadow
+      pkgs.gnugrep
+      pkgs.nftables
+      pkgs.kmod
+      pkgs.cryptsetup
+      pkgs.e2fsprogs
+      config.systemd.package
+    ];
     text = ''
       seed=/run/ccvm-seed
       mkdir -p "$seed"

@@ -187,7 +187,7 @@
   ```nix
   {
     inputs = {
-      nixpkgs.url = "nixpkgs/nixos-unstable";
+      nixpkgs.url = "nixpkgs/nixos-26.05";
       ccvm = {
         url = "github:jx-wi/ccvm";
         inputs.nixpkgs.follows = "nixpkgs";
@@ -251,13 +251,13 @@
     };
     programs.ccvm = {
       enable = true;
-      acceleration = "kvm";
       cores = 8;
       memory = 8192;
       vmDiskSize = 32;
       nix.enable = true;
       egressAllowlist = [
         "cache.nixos.org"
+        "storage.googleapis.com"
         "github.com"
         "api.github.com"
         "raw.githubusercontent.com"

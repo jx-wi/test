@@ -73,7 +73,7 @@ ln -s "$HM_STORE/agents" "$FAKE_HOME/.claude/agents"
 # Commands dir (enabled by default), skills dir (enabled), plugins dir (off by default),
 # config dir (off by default) — assert correct staging/exclusion below.
 mkdir -p "$FAKE_HOME/.claude/commands" "$FAKE_HOME/.claude/skills" \
-         "$FAKE_HOME/.claude/plugins" "$FAKE_HOME/.claude/config"
+  "$FAKE_HOME/.claude/plugins" "$FAKE_HOME/.claude/config"
 printf 'my-command\n' >"$FAKE_HOME/.claude/commands/my-cmd.md"
 printf 'my-skill\n' >"$FAKE_HOME/.claude/skills/my-skill.md"
 printf 'plugin-data\n' >"$FAKE_HOME/.claude/plugins/plugin.md"
@@ -95,7 +95,7 @@ EOF
 run() {
   local cwd
   cwd="$(mktemp -d "$WORK/cwd.XXXXXX")"
-  ( cd "$cwd" && "$CCVM" "$@" )
+  (cd "$cwd" && "$CCVM" "$@")
 }
 
 # ===========================================================================
@@ -174,7 +174,7 @@ SEED4="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 CCVM_SHARE_SETTINGS=1 run)
 #          legacy primaryApiKey are stripped from the staged copy; the non-secret structure stays.
 #          Gated on share.settings (the baked default is on, so this run has it).
 CJ="$SEED/claude-json"
-[[ -f "$CJ" ]] && ok "~/.claude.json staged (gated on share.settings, which is on)" ||
+[[ -f $CJ ]] && ok "~/.claude.json staged (gated on share.settings, which is on)" ||
   no "~/.claude.json not staged"
 if grep -q "$MCP_ENV_MARKER" "$CJ" 2>/dev/null || grep -q "$MCP_HEADER_MARKER" "$CJ" 2>/dev/null ||
   grep -q "$PRIMARY_KEY_MARKER" "$CJ" 2>/dev/null; then
@@ -210,7 +210,7 @@ declare -a EXPECT=(--model sonnet 'two words' 'a"b' '*' '--' '-x')
 SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 run "${EXPECT[@]}")/seed"
 declare -a GOT=()
 mapfile -t -d "" GOT <"$SEED/claude-args"
-if [[ "${GOT[*]@Q}" == "${EXPECT[*]@Q}" ]]; then
+if [[ ${GOT[*]@Q} == "${EXPECT[*]@Q}" ]]; then
   ok "forwarded argv round-trips byte-for-byte"
 else
   no "argv mismatch: got ${GOT[*]@Q} want ${EXPECT[*]@Q}"
@@ -224,7 +224,7 @@ SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 run --read-only-cwd --model
   no "mode not overlay (got $(cat "$SEED/mode"))"
 declare -a EXPECT_FWD=(--model x)
 mapfile -t -d "" GOT <"$SEED/claude-args"
-if [[ "${GOT[*]@Q}" == "${EXPECT_FWD[*]@Q}" ]]; then
+if [[ ${GOT[*]@Q} == "${EXPECT_FWD[*]@Q}" ]]; then
   ok "--read-only-cwd consumed, not forwarded to claude"
 else
   no "ccvm flag leaked into claude argv: ${GOT[*]@Q}"
@@ -328,7 +328,7 @@ EOF
 SEED="$(HOME="$GIT_HOME" XDG_CONFIG_HOME="$GIT_HOME/xdg" CCVM_SHARE_CLAUDE_CONFIG=0 run)/seed"
 GC="$SEED/gitconfig"
 
-[[ -f "$GC" ]] && ok "git: sanitized config staged into the seed" ||
+[[ -f $GC ]] && ok "git: sanitized config staged into the seed" ||
   no "git: no gitconfig staged"
 grep -q 'Fixture Tester' "$GC" 2>/dev/null && ok "git: user identity carried into the VM" ||
   no "git: user identity missing from staged config"
@@ -368,7 +368,7 @@ SEED="$(HOME="$GIT_HOME" XDG_CONFIG_HOME="$GIT_HOME/xdg" CCVM_SHARE_CLAUDE_CONFI
 # Default (rw) run: claude-md staged, carries the baked blurb AND the LIVE mode line.
 SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 run)/seed"
 CM="$SEED/claude-md"
-[[ -f "$CM" ]] && ok "claude-md: ccvm-context staged into the seed" ||
+[[ -f $CM ]] && ok "claude-md: ccvm-context staged into the seed" ||
   no "claude-md: not staged"
 grep -q 'CCVM-CONTEXT-MARKER' "$CM" 2>/dev/null &&
   ok "claude-md: baked context blurb reaches the seed" ||
@@ -428,7 +428,7 @@ grep -q 'PERSIST to the host this run' "$SEED/claude-md" 2>/dev/null &&
 #     to claude verbatim (transparent passthrough).
 # ===========================================================================
 VOUT="$(HOME="$FAKE_HOME" run --ccvm-version)"
-[[ "$VOUT" == "ccvm 0.0.0-test" ]] &&
+[[ $VOUT == "ccvm 0.0.0-test" ]] &&
   ok "--ccvm-version prints the baked version and exits" ||
   no "--ccvm-version wrong output (got '$VOUT')"
 
@@ -472,15 +472,15 @@ SEED="$(HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 \
   no "vmDiskSize: opt-in did not write the marker"
 
 IMG="$(find "$SCRATCHDIR" -maxdepth 1 -name 'vmdisk-*.img' 2>/dev/null | head -1)"
-if [[ -n "$IMG" && -f "$IMG" ]]; then
+if [[ -n $IMG && -f $IMG ]]; then
   ok "vmDiskSize: a sparse disk image was created in the disk-backed dir"
   apparent="$(stat -c %s "$IMG" 2>/dev/null || echo 0)"
-  [[ "$apparent" == 1073741824 ]] &&
+  [[ $apparent == 1073741824 ]] &&
     ok "vmDiskSize: image apparent size == 1 GiB" ||
     no "vmDiskSize: image apparent size wrong (got $apparent, want 1073741824)"
   # Sparse: it must not have actually allocated 1 GiB of blocks (du reports allocated KiB).
   allocated_kb="$(du -k "$IMG" 2>/dev/null | cut -f1)"
-  [[ "${allocated_kb:-999999}" -lt 1024 ]] &&
+  [[ ${allocated_kb:-999999} -lt 1024 ]] &&
     ok "vmDiskSize: image is sparse (allocated ${allocated_kb:-?}KiB ≪ 1 GiB apparent)" ||
     no "vmDiskSize: image not sparse (allocated ${allocated_kb}KiB)"
 else
@@ -499,7 +499,7 @@ rm -f "$SCRATCHDIR"/vmdisk-*.img
 
 # A non-integer value is rejected before boot (a typo must not silently disable the disk).
 if HOME="$FAKE_HOME" CCVM_SHARE_CLAUDE_CONFIG=0 CCVM_VM_DISK_SIZE=lots \
-   CCVM_SCRATCH_ALLOW_TMPFS=1 run >/dev/null 2>&1; then
+  CCVM_SCRATCH_ALLOW_TMPFS=1 run >/dev/null 2>&1; then
   no "vmDiskSize: invalid size 'lots' was not rejected"
 else
   ok "vmDiskSize: invalid size is rejected"
@@ -565,4 +565,4 @@ rm -f "$FAKE_KVM"
 
 # ---------------------------------------------------------------------------
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
-[[ "$FAIL" -eq 0 ]]
+[[ $FAIL -eq 0 ]]

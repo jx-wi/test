@@ -54,7 +54,7 @@ grep -qx '10.0.0.0/8' "$SEED/egress-allow" && ok "CIDR entry staged verbatim" ||
 if [[ -n "$(getent ahosts api.anthropic.com 2>/dev/null)" ]]; then
   # Network available (e.g. local run): the resolved IPs must be present.
   lines="$(wc -l <"$SEED/egress-allow")"
-  [[ "$lines" -gt 1 ]] && ok "api.anthropic.com auto-resolved into the allowlist" ||
+  [[ $lines -gt 1 ]] && ok "api.anthropic.com auto-resolved into the allowlist" ||
     no "api.anthropic.com not auto-resolved despite working DNS"
 else
   ok "auto-include ran offline without error (only verbatim CIDR present)"
@@ -88,7 +88,7 @@ fi
 # REFUSE to boot (die), never fall through to open egress. Deterministic only offline (with
 # DNS, the always-added api.anthropic.com resolves and the set is non-empty), so gate on DNS
 # availability — `nix flake check`'s sandbox is offline, which is where this matters.
-if [[ -n "${CCVM_FQDNONLY:-}" ]]; then
+if [[ -n ${CCVM_FQDNONLY:-} ]]; then
   if [[ -z "$(getent ahosts api.anthropic.com 2>/dev/null)" ]]; then
     fqdn_cwd="$(mktemp -d "$WORK/fqdn.XXXXXX")"
     if (cd "$fqdn_cwd" && "$CCVM_FQDNONLY") >/dev/null 2>&1; then
@@ -102,4 +102,4 @@ if [[ -n "${CCVM_FQDNONLY:-}" ]]; then
 fi
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
-[[ "$FAIL" -eq 0 ]]
+[[ $FAIL -eq 0 ]]
