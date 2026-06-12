@@ -4,55 +4,59 @@
 
 ***100% reproducible from this repository.***
 
-[![flake check](https://github.com/jx-wi/ccvm/actions/workflows/flake-check.yml/badge.svg)](https://github.com/jx-wi/ccvm/actions/workflows/flake-check.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+[![flake check](https://github.com/jx-wi/ccvm/actions/workflows/flake-check.yml/badge.svg)](https://github.com/jx-wi/ccvm/actions/workflows/flake-check.yml) [![docs](https://img.shields.io/badge/docs-mdBook-1f6feb)](https://jx-wi.github.io/ccvm/) [![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
 ---
 
-**[About](#about) · [Requirements](#requirements) · [Usage](#usage) · [Security](#security) · [Options](#options) · [Installation](#installation) · [Roadmap](#roadmap) · [License](#license)**
+**[About](#about) · [Quick start](#quick-start) · [Documentation](#documentation) · [Roadmap](#roadmap) · [License](#license)**
 
 ---
 
 ## About
 
-  `ccvm` aims to be a drop-in replacement for running `claude`
+  `ccvm` is a drop-in replacement for running `claude`.
 
-  Running `ccvm` will automatically whip up a RAM-only NixOS microVM and drop you into the same TUI that running `claude` would.
+  Running `ccvm` in any project directory automatically whips up a RAM-only NixOS microVM and
+  drops you into the same TUI that running `claude` would. Everything Claude does happens inside a
+  completely ephemeral sandbox that can only see the one directory you launched it in — not the
+  rest of your machine, your SSH keys, or your cloud credentials — and it all disappears when you
+  close it.
+
+  By default it feels exactly like native `claude` (live edits to your project, your `~/.claude`
+  settings, your git identity) — but your **login credential never crosses** into the VM, and one
+  setting (`egressAllowlist`) locks down where the VM can connect. The full threat model and every
+  option live in the **[documentation](https://jx-wi.github.io/ccvm/)**.
 
 ---
 
-## Requirements
+## Quick start
 
-  - Linux
-  - Nix
+  **Requirements:** Linux and [Nix](https://nixos.org/download/) (with flakes enabled).
 
----
-
-## Usage
-
-  Installed it already? Run it in any project directory, exactly like `claude`:
-
-  ```bash
-  ccvm
-  ```
-
-  Just want to try it, without installing anything? With Nix and flakes enabled:
+  Just want to try it, without installing anything? In any project directory:
 
   ```bash
   nix run github:jx-wi/ccvm
   ```
 
   > [!NOTE]
-  > No Nix yet? Install it with the [official installer](https://nixos.org/download/), then
-  > enable flakes once by adding `experimental-features = nix-command flakes` to
-  > `~/.config/nix/nix.conf`.
+  > No Nix yet? Install it with the [official installer](https://nixos.org/download/), then enable
+  > flakes once by adding `experimental-features = nix-command flakes` to `~/.config/nix/nix.conf`.
 
   > [!NOTE]
-  > The first run builds the VM image, so it takes a few minutes; after that it's cached and
-  > starts quickly.
+  > The first run builds the VM image, so it takes a few minutes; after that it's cached and starts
+  > quickly.
+
+  Once installed via home-manager (see **[Getting started](https://jx-wi.github.io/ccvm/getting-started.html)**),
+  run it anywhere, exactly like `claude`:
+
+  ```bash
+  ccvm
+  ```
 
   > [!NOTE]
-  > ccvm brings your `~/.claude` settings into the VM but not your login, so `/login` on first
-  > run (it stays in the VM and is wiped on exit) or set `ANTHROPIC_API_KEY`.
+  > ccvm brings your `~/.claude` settings into the VM but not your login, so `/login` on first run
+  > (it stays in the VM and is wiped on exit) or set `ANTHROPIC_API_KEY`.
 
   > [!WARNING]
   > Avoid pressing **Ctrl+Z** inside ccvm. Claude Code treats it as suspend and stops itself, but
@@ -62,233 +66,19 @@
 
 ---
 
-## Security
+## Documentation
 
-  By default, ccvm gives you **containment**: Claude runs inside a throwaway VM that can only
-  see the one directory you launched it in — not the rest of your machine, your SSH keys, or
-  your cloud credentials — and everything it does disappears when you close it.
+  Everything lives in the docs site: **[jx-wi.github.io/ccvm](https://jx-wi.github.io/ccvm/)**
 
-  Two things worth knowing about the defaults (which are tuned to feel exactly like native
-  `claude`):
-
-  - The VM can reach the internet freely, so a misbehaving or prompt-injected agent could, in
-    principle, send your project files (and any credential from a `/login` you did inside the VM)
-    somewhere they shouldn't. Locking that down is one setting — restrict where the VM is allowed
-    to connect:
-
-    ```nix
-    programs.ccvm.egressAllowlist = [ "github.com" "registry.npmjs.org" ];
-    # api.anthropic.com is always allowed, so Claude keeps working.
-    ```
-
-    > [!NOTE]
-    > Allowlisted FQDNs are pinned at launch to the IPs they resolve to — in the firewall and in
-    > the VM's resolver — so round-robin hosts like `github.com` work for the session. If a host
-    > rotates all its IPs mid-session it can drop out; restart, or allow a CIDR (GitHub lists its
-    > ranges at `api.github.com/meta`).
-
-    > [!NOTE]
-    > *Building* ccvm itself (or anything whose Nix closure includes `claude-code`) from **inside**
-    > an allowlisted VM also needs `storage.googleapis.com` on the list — that's where the unfree
-    > `claude-code` binary is downloaded from. Just *running* ccvm doesn't need it.
-
-  - The VM shares your settings, commands, agents, and memory by default — but **never** your
-    login credential (excluded by design, not by filter). You `/login` inside the VM (it
-    stays there and is wiped on exit) or set `ANTHROPIC_API_KEY`. The `share.*` options let
-    you control exactly which `~/.claude` items cross; turn any off individually:
-
-    ```nix
-    programs.ccvm.share.commands = false;  # don't share custom commands
-    programs.ccvm.share.claudeMd = false;  # don't share CLAUDE.md context
-    ```
-
-  The full threat model and design rationale live in [CLAUDE.md](CLAUDE.md).
-
----
-
-## Options
-
-  > [!NOTE]
-  > This section will describe ccvm options based on their home-manager module's names. See [alternate option declarations](#alternate-option-declarations) for configuration via environment variables and/or flags.
-
-  > [!WARNING]
-  > Egress is open by default (like native `claude`), so a compromised agent could exfiltrate
-  > your project files (and anything you authenticate with inside the VM). Lock it down with
-  > `egressAllowlist`. Full threat model: CLAUDE.md.
-
-  Ordered by how often you'll reach for them — essentials first, escape hatches last.
-
-  - `enable`: install the `ccvm` command (default: `false`) (types: `true`/`false`)
-  - `writableCwd`: mount the host CWD (the project dir `ccvm` was launched in) read-write so the agent's edits land on the host live; `false` keeps the CWD read-only with edits in an ephemeral overlay discarded on exit. Only this one directory ever crosses to the host (default: `true`) (types: `true`/`false`)
-  - `share.settings` / `share.claudeMd` / `share.keybindings` / `share.commands` / `share.agents` / `share.skills` / `share.outputStyles`: stage the named item from host `~/.claude` into the VM — your settings, context file, keyboard shortcuts, commands, agents, skills, and output styles, but **never** your login credential (excluded by design) (default: `true` for all seven) (types: `true`/`false`)
-  - `share.plugins` / `share.config`: opt-in sharing for `~/.claude/plugins` and `~/.claude/config` (default: `false` for both) (types: `true`/`false`)
-  - `memory`: how much RAM in MiB to allocate to the VM (default: `4096`) (types: positive integers)
-  - `cores`: how many vCPUs to allocate to the VM (default: `4`) (types: positive integers)
-  - `acceleration`: which acceleration type to use (default: `"auto"`) (types: `"auto"`, `"kvm"`, or `"tcg"`)
-  - `extraPackages`: additional packages to install into the VM (default: `[]`) (types: list of strings)
-  - `nix.enable`: enable Nix in the VM (default: `false`) (types: `true`/`false`)
-  - `nix.substituters`: extra binary caches for in-VM Nix (default: `[]`) (types: list of strings)
-  - `nix.trustedPublicKeys`: public keys that verify paths from `nix.substituters` (default: `[]`) (types: list of strings)
-  - `share.gitConfig`: stage a sanitized copy of your global git config so in-VM `git` commits as you (no credentials/signing keys cross) (default: `true`) (types: `true`/`false`)
-  - `persistClaudeProjects`: mount `~/.claude/projects` read-write so transcripts + memory persist back (cross-run `--resume`); scoped to `projects/` only — nothing else under `~/.claude` is writable (default: `false`) (types: `true`/`false`)
-  - `clipboard.images`: make Ctrl+V **image paste** work inside the VM (like native `claude`) by bridging the host clipboard image over the existing SSH connection — image-only, so host clipboard *text* never crosses, and it opens no new network hole (default: `true`) (types: `true`/`false`)
-  - `egressAllowlist`: FQDN/IP/CIDR egress allowlist — empty = open egress, non-empty = default-deny firewall (default: `[]`) (types: list of strings)
-  - `egressPorts`: destination ports the allowlist permits (default: `[ 443 ]`) (types: list of ports)
-  - `agentSudo`: whether the in-VM agent gets passwordless root (sudo); `null` (default) = auto — on for DevEx and `--shell` debugging, but automatically **off** when `egressAllowlist` is set so a compromised agent can't flush the in-guest egress firewall to exfiltrate; `true`/`false` force it (default: `null`) (types: `null`, or `true`/`false`)
-  - `vmDiskSize`: GiB of opt-in encrypted ephemeral disk at `/scratch`; `0` keeps pure RAM (default: `0`) (types: non-negative integer)
-  - `apiKeyVariable`: host env var carrying the Anthropic API key, passed to the VM only over SSH (default: `"ANTHROPIC_API_KEY"`) (types: string)
-  - `extraClaudeMd`: markdown staged as the guest's `~/.claude/CLAUDE.md` telling the agent it's in ccvm (default: built-in blurb) (types: lines; `""` disables)
-  - `package`: the claude-code package to run in the VM (default: `pkgs.claude-code`) (types: package)
-  - `extraGuestModules`: extra NixOS modules merged into the guest, an escape hatch (default: `[]`) (types: list of modules)
-  - `lockGuestMemory`: mlock guest RAM so in-VM secrets can't be paged to host swap. **Takes tinkering to work and isn't recommended for most people** — QEMU refuses to start unless you raise the host's `RLIMIT_MEMLOCK` (`ulimit -l`, systemd `LimitMEMLOCK`, or `limits.conf`). Only worth it if **(a)** your host swap is unencrypted (the one case it actually buys you something) or **(b)** you're willing to do that host setup; otherwise leave it off (default: `false`) (types: `true`/`false`)
-
-### Alternate option declarations
-
-  Per-run env overrides (`CCVM_X == option`):
-
-  - `CCVM_WRITABLE_CWD` == `writableCwd`
-  - `CCVM_ACCEL` == `acceleration`
-  - `CCVM_MEMORY` == `memory`
-  - `CCVM_SHARE_SETTINGS` == `share.settings` (likewise `CCVM_SHARE_CLAUDEMD`, `CCVM_SHARE_COMMANDS`, `CCVM_SHARE_AGENTS`, `CCVM_SHARE_SKILLS`, `CCVM_SHARE_PLUGINS`, `CCVM_SHARE_CONFIG`)
-  - `CCVM_SHARE_CLAUDE_CONFIG` == back-compat: `0` or `1` toggles all claude `share.*` items at once; per-item vars win
-  - `CCVM_SHARE_GIT_CONFIG` == `share.gitConfig`
-  - `CCVM_PERSIST_PROJECTS` == `persistClaudeProjects`
-  - `CCVM_CLIPBOARD_IMAGES` == `clipboard.images` (only `0` honored — disables image paste for the run)
-  - `CCVM_CLAUDE_MD` == `extraClaudeMd`
-  - `CCVM_MLOCK` == `lockGuestMemory`
-  - `CCVM_VM_DISK_SIZE` == `vmDiskSize`
-
-  ccvm-only flags (consumed, never forwarded to `claude`):
-
-  - `--writable-cwd` / `--read-only-cwd` == `writableCwd` (== `CCVM_WRITABLE_CWD`)
-  - `--shell` (debug shell), `--ccvm-debug` (stream console), `--ccvm-help`, `--ccvm-version`
-
----
-
-## Installation
-
-### home-manager example
-
-  1. Install Nix
-
-  You can find the installer at [nixos.org/download](https://nixos.org/download/).
-  You don't need NixOS to use Nix or ccvm. If you aren't on NixOS and don't plan on switching (yet), use the install *script* found at the linked webpage.
-
-  2. Flake configuration
-
-  If you don't already have a repo for your dotfiles, that's fine for now; just make a directory for the flake:
-
-  ```bash
-  mkdir -p ~/Projects/yourConfigRepo
-  ```
-
-  You'll also need nix-command and flakes enabled. To do this on the user-level, add this to `~/.config/nix/nix.conf`:
-
-  ```
-  experimental-features = nix-command flakes
-  ```
-
-  In `yourConfigRepo/flake.nix` (ensure you replace all instances of `yourUsername`):
-
-  ```nix
-  {
-    inputs = {
-      nixpkgs.url = "nixpkgs/nixos-26.05";
-      ccvm = {
-        url = "github:jx-wi/ccvm";
-        inputs.nixpkgs.follows = "nixpkgs";
-      };
-      home-manager = {
-        url = "github:nix-community/home-manager";
-        inputs.nixpkgs.follows = "nixpkgs";
-      };
-    };
-    outputs = {
-      nixpkgs,
-      ccvm,
-      home-manager,
-      ...
-    }:
-    let
-      system = "x86_64-linux";
-      pkgs = import nixpkgs {
-        inherit system;
-      };
-    in
-    {
-      homeConfigurations.yourUsername = home-manager.lib.homeManagerConfiguration {
-        inherit pkgs;
-        modules = [
-          ccvm.homeModules.default
-          ./yourUsername/home.nix
-        ];
-      };
-    };
-  }
-  ```
-
-  Now update the lock file:
-
-  ```bash
-  cd ~/Projects/yourConfigRepo && nix flake update ccvm --flake path:.
-  ```
-
-  3. home-manager configuration
-
-  Make a folder in the config repo for your home-manager configuration files if you don't already have one:
-
-  ```bash
-  mkdir -p ~/Projects/yourConfigRepo/yourUsername
-  ```
-
-  In `yourConfigRepo/yourUsername/home.nix` (replace all instances of `yourUsername` again):
-
-  ```nix
-  {
-    pkgs,
-    lib,
-    ...
-  }:
-  {
-    home = {
-      stateVersion = "26.05";
-      username = "yourUsername";
-      homeDirectory = "/home/yourUsername";
-    };
-    programs.ccvm = {
-      enable = true;
-      cores = 8;
-      memory = 8192;
-      vmDiskSize = 32;
-      nix.enable = true;
-      egressAllowlist = [
-        "cache.nixos.org"
-        "storage.googleapis.com"
-        "github.com"
-        "api.github.com"
-        "raw.githubusercontent.com"
-        "codeload.github.com"
-        "npmjs.com"
-        "registry.npmjs.org"
-      ];
-      extraPackages = with pkgs; [
-        bottom
-        delta
-        eza
-        yazi
-      ];
-    };
-    nixpkgs.config.allowUnfreePredicate = pkg: builtins.elem (lib.getName pkg) [
-      "claude-code"
-    ];
-  }
-  ```
-
-  Now switch to your new configuration:
-
-  ```bash
-  cd ~/Projects/yourConfigRepo && nix run nixpkgs#nh -- home switch path:.
-  ```
+  - **[Getting started](https://jx-wi.github.io/ccvm/getting-started.html)** — requirements, the
+    full home-manager install, first-run authentication.
+  - **[Options](https://jx-wi.github.io/ccvm/options.html)** — every `programs.ccvm.*` setting and
+    the per-run `CCVM_*` overrides (egress, encrypted disk, in-VM Nix, config sharing, …).
+  - **[Security](https://jx-wi.github.io/ccvm/security/threat-model.html)** — the threat model, the
+    must-not-regress invariants, the egress design, and the encrypted-disk / clipboard-bridge
+    internals.
+  - **[Developing](https://jx-wi.github.io/ccvm/developing/repo-map.html)** — repo map, the
+    build/test loop, the deliberate defaults, and the settled design decisions.
 
 ---
 

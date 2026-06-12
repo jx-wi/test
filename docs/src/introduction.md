@@ -4,7 +4,7 @@
 zero host setup.**
 
 `ccvm` is a drop-in replacement for running `claude`. Launch it in any project directory and it
-whips up a throwaway NixOS microVM, drops you into the exact same Claude Code TUI you'd get from
+whips up a completely ephemeral NixOS microVM, drops you into the exact same Claude Code TUI you'd get from
 native `claude`, and tears the whole VM down when you exit. Everything Claude does happens inside
 the VM; the only things that cross back to your host are the edits it makes to the one project
 directory you launched it in.

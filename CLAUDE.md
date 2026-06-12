@@ -35,7 +35,7 @@ before changing the relevant code.
 | `lib/mkccvm.nix` | The builder. Evaluates the guest NixOS system, then bakes its boot artifacts + scalar config into the wrapper via `builtins.replaceStrings` `@TOKENS@`. |
 | `lib/defaults.nix` | Default config values for the builder. |
 | `lib/ccvm-context.md` | Built-in `extraClaudeMd` blurb staged as the guest's `~/.claude/CLAUDE.md`. |
-| `wrapper/ccvm.sh` | Host wrapper **template** (the `@TOKEN@` placeholders). Generates throw-away SSH keys, writes the seed, boots QEMU headless, `ssh -tt`s in, traps cleanup. |
+| `wrapper/ccvm.sh` | Host wrapper **template** (the `@TOKEN@` placeholders). Generates completely ephemeral SSH keys, writes the seed, boots QEMU headless, `ssh -tt`s in, traps cleanup. |
 | `guest/default.nix` | The microVM NixOS guest (tmpfs root, ro squashfs `/nix/store`). |
 | `guest/launcher.nix` | `ccvm-seed.service` (root oneshot, `Before=sshd`) installs the pinned host key + `authorized_keys` and does every 9p/overlay mount. `ccvm-guest-launch` is the **unprivileged** sshd `ForceCommand` that `cd`s to the workspace and execs claude (or zsh). |
 | `guest/sshd.nix` | Hardened sshd: key-only, no root, single `ForceCommand`. |
