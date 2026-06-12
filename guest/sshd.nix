@@ -37,7 +37,8 @@ in
     extraConfig = ''
       HostKey /etc/ssh/ssh_host_ed25519_key
       ForceCommand ${cfg.launcherPackage}/bin/ccvm-guest-launch
-    '' + lib.optionalString cfg.clipboard.images ''
+    ''
+    + lib.optionalString cfg.clipboard.images ''
       PermitListen 127.0.0.1:${toString cfg.clipboard.port}
     '';
   };

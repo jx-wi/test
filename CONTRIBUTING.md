@@ -38,8 +38,9 @@ tests grep the seed for the API key and the OAuth credential — keep them passi
 
 - **Commit trailer (exact):** `Co-authored-by: Claude <noreply@anthropic.com>` for
   AI-assisted commits (note: lowercase `authored-by`, bare `Claude`).
-- **Run the formatters** in the dev shell (`nix develop`): `shellcheck` for the wrapper
-  (it also runs at build), `nixpkgs-fmt` for Nix.
+- **Format before committing:** `nix fmt` (treefmt — `nixfmt` for Nix, `shfmt` for the
+  shell scripts). CI enforces it (`checks.formatting`), so an unformatted tree fails
+  `nix flake check`. `shellcheck` additionally lints the wrapper and also runs at build.
 
 ## License
 

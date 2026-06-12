@@ -11,7 +11,7 @@
 # with the caller's own `pkgs`, so guest and host stay on one nixpkgs.
 { pkgs }:
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
 
   # Default config VALUES live in lib/defaults.nix — the single source of truth shared with
   # the home-manager module's option defaults, so the two can't drift. See that file for the
@@ -41,7 +41,8 @@ let
   # choice. Guest-build-time only (flips a NixOS option, rebuilds the closure) — no wrapper @TOKEN@,
   # no runtime plumbing. This is the IN-GUEST mitigation; host-side egress enforcement (outside the
   # guest's control entirely) is the complete fix — see CLAUDE.md, "Egress: an allowlist, not Tor".
-  agentSudoEnabled = if config.agentSudo == null then (config.egressAllowlist == [ ]) else config.agentSudo;
+  agentSudoEnabled =
+    if config.agentSudo == null then (config.egressAllowlist == [ ]) else config.agentSudo;
   system = pkgs.stdenv.hostPlatform.system;
 
   # The wrapper is arch-specific: pick the matching qemu-system binary and a default
@@ -88,7 +89,11 @@ let
   # The ccvm-context CLAUDE.md baked to a store file; the wrapper copies it into the seed and
   # the guest lays it at ~/.claude/CLAUDE.md. Empty extraClaudeMd => bake an empty path so the
   # wrapper stages nothing (injection disabled).
-  claudeMdFile = if config.extraClaudeMd == "" then "" else "${pkgs.writeText "ccvm-context.md" config.extraClaudeMd}";
+  claudeMdFile =
+    if config.extraClaudeMd == "" then
+      ""
+    else
+      "${pkgs.writeText "ccvm-context.md" config.extraClaudeMd}";
 
   # ccvm's own version. Pre-public (no tagged release yet), surfaced by `ccvm --ccvm-version`
   # (baked into the wrapper as @VERSION@). Bump on release.
@@ -102,7 +107,12 @@ let
     homepage = "https://github.com/jx-wi/ccvm";
     license = lib.licenses.mit;
     mainProgram = "ccvm";
-    maintainers = [{ github = "jx-wi"; name = "jx-wi"; }];
+    maintainers = [
+      {
+        github = "jx-wi";
+        name = "jx-wi";
+      }
+    ];
     platforms = lib.platforms.linux;
   };
 
@@ -111,75 +121,88 @@ let
   # attr into guest/default.nix's nix.settings, with no wrapper token or runtime plumbing (a binary
   # cache is HTTP substitution, not a mount). Only meaningful with nix.enable; warn (not a hard
   # assert — keeps `nix flake check` evaluable) if set without it, since there is then no in-VM nix.
-  wrapper = lib.warnIf (config.nix.substituters != [ ] && !config.nix.enable)
-    "ccvm: programs.ccvm.nix.substituters has no effect without nix.enable = true (no in-VM nix to use the extra binary caches)."
-    (pkgs.writeShellApplication {
-    name = "ccvm";
-    inherit meta;
-    runtimeInputs = with pkgs; [ qemu coreutils openssh findutils getent git jq socat ];
-    text = builtins.replaceStrings
-      [
-        "@KERNEL@"
-        "@INITRD@"
-        "@STOREIMG@"
-        "@APPEND@"
-        "@MEMORY@"
-        "@CORES@"
-        "@MODE@"
-        "@APIKEYVAR@"
-        "@SHARE_SETTINGS@"
-        "@SHARE_CLAUDEMD@"
-        "@SHARE_COMMANDS@"
-        "@SHARE_AGENTS@"
-        "@SHARE_SKILLS@"
-        "@SHARE_PLUGINS@"
-        "@SHARE_CONFIG@"
-        "@PERSISTPROJECTS@"
-        "@SHAREGIT@"
-        "@CLAUDEMD@"
-        "@QEMU@"
-        "@DEFAULTMACHINE@"
-        "@MEMLOCK@"
-        "@EGRESSALLOW@"
-        "@EGRESSPORTS@"
-        "@VERSION@"
-        "@VMDISKSIZE@"
-        "@ACCELERATION@"
-        "@CLIPIMAGES@"
-        "@CLIPGUESTPORT@"
-      ]
-      [
-        kernel
-        initrd
-        "${storeImage}"
-        append
-        (toString config.memory)
-        (toString config.cores)
-        (if config.writableCwd then "rw" else "overlay")
-        config.apiKeyVariable
-        (if config.share.settings then "1" else "0")
-        (if config.share.claudeMd then "1" else "0")
-        (if config.share.commands then "1" else "0")
-        (if config.share.agents then "1" else "0")
-        (if config.share.skills then "1" else "0")
-        (if config.share.plugins then "1" else "0")
-        (if config.share.config then "1" else "0")
-        (if config.persistClaudeProjects then "1" else "0")
-        (if config.share.gitConfig then "1" else "0")
-        claudeMdFile
-        qemuBin
-        defaultMachine
-        (if config.lockGuestMemory then "1" else "0")
-        (lib.concatStringsSep " " config.egressAllowlist)
-        (lib.concatStringsSep " " (map toString config.egressPorts))
-        version
-        (toString config.vmDiskSize)
-        config.acceleration
-        (if config.clipboard.images then "1" else "0")
-        (toString gc.ccvm.clipboard.port)
-      ]
-      (builtins.readFile ../wrapper/ccvm.sh);
-  });
+  wrapper =
+    lib.warnIf (config.nix.substituters != [ ] && !config.nix.enable)
+      "ccvm: programs.ccvm.nix.substituters has no effect without nix.enable = true (no in-VM nix to use the extra binary caches)."
+      (
+        pkgs.writeShellApplication {
+          name = "ccvm";
+          inherit meta;
+          runtimeInputs = with pkgs; [
+            qemu
+            coreutils
+            openssh
+            findutils
+            getent
+            git
+            jq
+            socat
+          ];
+          text =
+            builtins.replaceStrings
+              [
+                "@KERNEL@"
+                "@INITRD@"
+                "@STOREIMG@"
+                "@APPEND@"
+                "@MEMORY@"
+                "@CORES@"
+                "@MODE@"
+                "@APIKEYVAR@"
+                "@SHARE_SETTINGS@"
+                "@SHARE_CLAUDEMD@"
+                "@SHARE_COMMANDS@"
+                "@SHARE_AGENTS@"
+                "@SHARE_SKILLS@"
+                "@SHARE_PLUGINS@"
+                "@SHARE_CONFIG@"
+                "@PERSISTPROJECTS@"
+                "@SHAREGIT@"
+                "@CLAUDEMD@"
+                "@QEMU@"
+                "@DEFAULTMACHINE@"
+                "@MEMLOCK@"
+                "@EGRESSALLOW@"
+                "@EGRESSPORTS@"
+                "@VERSION@"
+                "@VMDISKSIZE@"
+                "@ACCELERATION@"
+                "@CLIPIMAGES@"
+                "@CLIPGUESTPORT@"
+              ]
+              [
+                kernel
+                initrd
+                "${storeImage}"
+                append
+                (toString config.memory)
+                (toString config.cores)
+                (if config.writableCwd then "rw" else "overlay")
+                config.apiKeyVariable
+                (if config.share.settings then "1" else "0")
+                (if config.share.claudeMd then "1" else "0")
+                (if config.share.commands then "1" else "0")
+                (if config.share.agents then "1" else "0")
+                (if config.share.skills then "1" else "0")
+                (if config.share.plugins then "1" else "0")
+                (if config.share.config then "1" else "0")
+                (if config.persistClaudeProjects then "1" else "0")
+                (if config.share.gitConfig then "1" else "0")
+                claudeMdFile
+                qemuBin
+                defaultMachine
+                (if config.lockGuestMemory then "1" else "0")
+                (lib.concatStringsSep " " config.egressAllowlist)
+                (lib.concatStringsSep " " (map toString config.egressPorts))
+                version
+                (toString config.vmDiskSize)
+                config.acceleration
+                (if config.clipboard.images then "1" else "0")
+                (toString gc.ccvm.clipboard.port)
+              ]
+              (builtins.readFile ../wrapper/ccvm.sh);
+        }
+      );
 in
 # Audit S-2: a few config values are baked into the wrapper as raw shell (APIKEYVAR="@APIKEYVAR@",
 # EGRESSALLOW="@EGRESSALLOW@", …). The module types keep them strings but not shell-safe, so validate
@@ -187,9 +210,20 @@ in
 # the user's own (trusted) config feeds this, so these are footgun guards, not a trust boundary.
 assert lib.assertMsg (builtins.match "[A-Za-z_][A-Za-z0-9_]*" config.apiKeyVariable != null)
   "ccvm: apiKeyVariable must be a valid shell/env identifier ([A-Za-z_][A-Za-z0-9_]*); got '${config.apiKeyVariable}'.";
-assert lib.assertMsg (lib.all (e: builtins.match "[A-Za-z0-9._:/-]+" e != null) config.egressAllowlist)
+assert lib.assertMsg
+  (lib.all (e: builtins.match "[A-Za-z0-9._:/-]+" e != null) config.egressAllowlist)
   "ccvm: every egressAllowlist entry must be an FQDN / IP / CIDR ([A-Za-z0-9._:/-]); got [ ${lib.concatStringsSep " " config.egressAllowlist} ].";
 {
-  inherit wrapper guestSystem toplevel storeImage append kernel initrd config meta;
+  inherit
+    wrapper
+    guestSystem
+    toplevel
+    storeImage
+    append
+    kernel
+    initrd
+    config
+    meta
+    ;
   kernelParams = gc.boot.kernelParams;
 }

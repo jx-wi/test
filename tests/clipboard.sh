@@ -16,8 +16,14 @@ GUEST_SRC="${GUEST_SRC:?set GUEST_SRC to guest/default.nix}"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 pass=0
-ok()   { printf '  ok   %s\n' "$1"; pass=$((pass + 1)); }
-fail() { printf '  FAIL %s\n' "$1" >&2; exit 1; }
+ok() {
+  printf '  ok   %s\n' "$1"
+  pass=$((pass + 1))
+}
+fail() {
+  printf '  FAIL %s\n' "$1" >&2
+  exit 1
+}
 
 # ---- extract the real reader heredoc from the wrapper (between <<'CLIPEOF' and CLIPEOF) -------
 awk '/<<.CLIPEOF.$/{f=1;next} /^CLIPEOF$/{f=0} f' "$WRAPPER_SRC" >"$WORK/clip-reader"
@@ -59,7 +65,7 @@ ok "image/png streams the exact host clipboard bytes"
 for t in 'text/plain' 'text/plain;charset=utf-8' 'UTF8_STRING' 'STRING'; do
   out="$(reader "$t" || true)"
   case "$out" in
-    *SECRET*|*PASSWORD*) fail "host clipboard text crossed for target '$t'" ;;
+    *SECRET* | *PASSWORD*) fail "host clipboard text crossed for target '$t'" ;;
   esac
   [ -z "$out" ] || fail "reader returned data for non-image target '$t': [$out]"
 done
@@ -69,20 +75,20 @@ ok "host clipboard TEXT never crosses (image-only enforced host-side)"
 #    widen to text nor inject a command. Build the payload with an ESCAPED \$ so the value is a
 #    literal string (variable-expansion never re-triggers command substitution) and feed it through.
 rm -f "$WORK/pwned"
-inj="image/png\$(touch $WORK/pwned)"   # literal: image/png$(touch /tmp/…/pwned)
+inj="image/png\$(touch $WORK/pwned)" # literal: image/png$(touch /tmp/…/pwned)
 out="$(reader "$inj" || true)"
 [ ! -e "$WORK/pwned" ] || fail "request string was evaluated as a command (injection!)"
 [ -z "$out" ] || fail "a non-allowlisted request produced output: [$out]"
 ok "crafted request strings are inert (no widening, no injection)"
 
 # ---- guest shim (guest/default.nix): its request-mapping must refuse non-image targets --------
-grep -q 'image/png|image/bmp|image/jpeg|image/gif|image/webp) req=' "$GUEST_SRC" \
-  || fail "guest xclip shim no longer maps image targets to a request"
+grep -q 'image/png|image/bmp|image/jpeg|image/gif|image/webp) req=' "$GUEST_SRC" ||
+  fail "guest xclip shim no longer maps image targets to a request"
 # The shim's catch-all for any other target (text/plain, etc.) must be a hard refusal (exit 1),
 # so it never even contacts the host for text.
-grep -q '\*) exit 1 ;;.*# text/plain' "$GUEST_SRC" \
-  || grep -qE '\*\) exit 1' "$GUEST_SRC" \
-  || fail "guest xclip shim lost its non-image refusal (text could reach the bridge)"
+grep -q '\*) exit 1 ;;.*# text/plain' "$GUEST_SRC" ||
+  grep -qE '\*\) exit 1' "$GUEST_SRC" ||
+  fail "guest xclip shim lost its non-image refusal (text could reach the bridge)"
 ok "guest shim refuses non-image targets (text never even requested)"
 
 printf 'clipboard: %d checks passed\n' "$pass"

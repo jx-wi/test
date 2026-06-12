@@ -77,7 +77,7 @@ run_capture() { # $1=wrapper, $2=project dir, rest=ccvm args; prints cleaned gue
   errlog="$(mktemp)"
   # `|| rc=$?` captures the wrapper's true exit code (an `if !` test would reset $? to 0)
   # and keeps `set -e` from killing us, so a boot failure surfaces instead of dying mute.
-  out="$( (cd "$proj" && "$wrap" "$@") 2>"$errlog" )" || rc=$?
+  out="$( (cd "$proj" && "$wrap" "$@") 2>"$errlog")" || rc=$?
   if ((rc != 0)); then
     {
       printf '\n!! ccvm exited %d — wrapper stderr follows (likely a boot failure):\n' "$rc"

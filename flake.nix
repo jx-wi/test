@@ -4,21 +4,39 @@
   inputs = {
     # nixos-unstable: claude-code is unfree and moves fast.
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+
+    # treefmt-nix: one `nix fmt` entrypoint + a `nix flake check` formatting gate. Pinned to
+    # follow our nixpkgs so it pulls no second nixpkgs into the closure.
+    treefmt-nix.url = "github:numtide/treefmt-nix";
+    treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs }:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      treefmt-nix,
+    }:
     let
-      systems = [ "x86_64-linux" "aarch64-linux" ];
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
 
-      pkgsFor = system: import nixpkgs {
-        inherit system;
-        config.allowUnfree = true; # claude-code is unfree
-      };
+      pkgsFor =
+        system:
+        import nixpkgs {
+          inherit system;
+          config.allowUnfree = true; # claude-code is unfree
+        };
 
       # Default-config ccvm build products for each system (wrapper + guest artifacts).
-      partsAll = forAllSystems (system:
-        (import ./lib/mkccvm.nix { pkgs = pkgsFor system; }) { });
+      partsAll = forAllSystems (system: (import ./lib/mkccvm.nix { pkgs = pkgsFor system; }) { });
+
+      # treefmt eval per system: nixfmt (Nix) + shfmt (wrapper & test shell scripts). Drives
+      # both the `formatter` output (`nix fmt`) and the `checks.formatting` CI gate.
+      treefmtEval = forAllSystems (system: treefmt-nix.lib.evalModule (pkgsFor system) ./treefmt.nix);
     in
     {
       # `nix run github:jx-wi/ccvm` works standalone; defaults mirror native claude
@@ -30,11 +48,12 @@
         # bring-up handles (kernel cmdline `append`, the evaluated `guestSystem` config) are
         # deliberately NOT flake outputs — introspect them with a direct `import ./lib/mkccvm.nix`
         # (recipe in CLAUDE.md, "Build / test / debug"), which keeps every output correctly typed.
-        guest-store = partsAll.${system}.storeImage;  # ro squashfs /nix/store image
+        guest-store = partsAll.${system}.storeImage; # ro squashfs /nix/store image
         guest-toplevel = partsAll.${system}.toplevel; # full guest system closure
       });
 
-      apps = forAllSystems (system:
+      apps = forAllSystems (
+        system:
         let
           # `meta` on an app silences the `nix flake check` "lacks attribute 'meta'" warning
           # and gives `nix run`/search a description. Reuse the wrapper's package meta.
@@ -47,24 +66,46 @@
         {
           default = app;
           ccvm = app;
-        });
+        }
+      );
 
-      devShells = forAllSystems (system:
-        let pkgs = pkgsFor system; in {
+      devShells = forAllSystems (
+        system:
+        let
+          pkgs = pkgsFor system;
+        in
+        {
           default = pkgs.mkShell {
-            packages = with pkgs; [ qemu openssh shellcheck nixpkgs-fmt ];
+            packages = with pkgs; [
+              qemu
+              openssh
+              shellcheck
+              nixfmt
+            ];
           };
-        });
+        }
+      );
+
+      # `nix fmt` formats the tree (nixfmt + shfmt); the same config gates CI as
+      # `checks.formatting`, so running `nix flake check` catches unformatted files too.
+      formatter = forAllSystems (system: treefmtEval.${system}.config.build.wrapper);
 
       # `nix flake check` builds the guest image, shellchecks the wrapper (via
       # writeShellApplication), and runs the host-side guarantee tests (secret hygiene,
       # config staging, verbatim argv, mode selection) against the real wrapper script
       # driven by its dry-run hook — see tests/.
-      checks = forAllSystems (system:
-        let pkgs = pkgsFor system; in {
+      checks = forAllSystems (
+        system:
+        let
+          pkgs = pkgsFor system;
+        in
+        {
           guest-image = partsAll.${system}.storeImage;
           wrapper = partsAll.${system}.wrapper;
-        } // (import ./tests { inherit pkgs; }));
+          formatting = treefmtEval.${system}.config.build.check self;
+        }
+        // (import ./tests { inherit pkgs; })
+      );
 
       # The home-manager module that exposes programs.ccvm.* and installs `ccvm`. Exposed as
       # `homeModules` (NOT the older `homeManagerModules`): stock Nix recognizes `homeModules` as a

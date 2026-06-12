@@ -1,0 +1,7 @@
+# statix lint config (CI runs `statix check .`). All lints stay on EXCEPT:
+#
+# repeated_keys (W20): ccvm's guest config deliberately uses the flat NixOS-module style
+# (`boot.loader.grub.enable = …; boot.initrd.systemd.enable = …;`) so each setting carries
+# its own explanatory comment. Collapsing into `boot = { … }` — what this lint wants — would
+# fight that documented, comment-per-setting style across guest/default.nix and tests/boot.nix.
+disabled = ["repeated_keys"]

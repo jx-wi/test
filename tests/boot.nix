@@ -22,7 +22,10 @@ in
   # (must be blocked). api.anthropic.com is auto-included by the builder regardless. Setting
   # egressAllowlist also AUTO-DROPS the agent's sudo (agentSudo auto), so this posture doubles as the
   # check that a hardened-egress guest can't flush its own firewall (boot.sh asserts SUDO:dropped).
-  egress = mk { egressAllowlist = [ "example.com" ]; egressPorts = [ 443 ]; };
+  egress = mk {
+    egressAllowlist = [ "example.com" ];
+    egressPorts = [ 443 ];
+  };
   # Opt-in encrypted disk pool; the stub asserts /scratch is a writable dm-crypt mount.
   # 1 GiB leaves room for the LUKS header + an ext4 (sparse, so it costs ~nothing on disk).
   scratch = mk { vmDiskSize = 1; };
@@ -37,7 +40,10 @@ in
   # disk (not tmpfs), and /scratch shares that same pool. The stub asserts /nix/.rw-store is a
   # dm-crypt ext4 (RWSTORE:disk + RWSTORE:encrypted), the store is still an overlay, and /scratch
   # works. 1 GiB is enough for the LUKS header + ext4 (sparse, so ~free on disk).
-  nixDisk = mk { nix.enable = true; vmDiskSize = 1; };
+  nixDisk = mk {
+    nix.enable = true;
+    vmDiskSize = 1;
+  };
   # In-VM nix + an extra binary cache. The stub asserts the guest nix.conf carries the configured
   # substituter URL and its trusted public key (a real fetch from the cache is a human/network check;
   # example.invalid never resolves). Verifies nix.substituters/trustedPublicKeys reach guest nix.conf.
@@ -51,5 +57,8 @@ in
   # could regain root via the daemon (post-build-hook) and `nft flush` the egress firewall, defeating
   # the drop. The stub reports TRUSTED:agent-not-trusted and the egress probes still show the firewall
   # holding. example.com is allowlisted; api.anthropic.com is auto-included.
-  nixEgress = mk { nix.enable = true; egressAllowlist = [ "example.com" ]; };
+  nixEgress = mk {
+    nix.enable = true;
+    egressAllowlist = [ "example.com" ];
+  };
 }

@@ -8,7 +8,12 @@
 # store image and toplevel and boots them with a runtime-constructed QEMU command
 # line (the workspace share and SSH port are only known at `ccvm` launch time, so
 # they cannot be declared here — see the microvm.nix runtime-share trap, CLAUDE.md).
-{ config, lib, pkgs, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 let
   cfg = config.ccvm;
 
@@ -27,7 +32,15 @@ let
   # key is already 64 random bytes; a memory-hard KDF would only slow the initrd for no gain).
   storeDiskScript = pkgs.writeShellScript "ccvm-store-disk-setup" ''
     set -u
-    export PATH=${lib.makeBinPath [ pkgs.coreutils pkgs.util-linux pkgs.cryptsetup pkgs.e2fsprogs config.systemd.package ]}:$PATH
+    export PATH=${
+      lib.makeBinPath [
+        pkgs.coreutils
+        pkgs.util-linux
+        pkgs.cryptsetup
+        pkgs.e2fsprogs
+        config.systemd.package
+      ]
+    }:$PATH
     target=/sysroot/nix/.rw-store
     log() { echo "ccvm-store-disk: $*" >&2; }
 
@@ -258,9 +271,27 @@ in
     # the default initrd only carries squashfs/overlay/9p, so without this `mount` reports "unknown
     # filesystem type 'ext4'". Gated so the default (RAM-only) initrd stays lean. The post-boot
     # /scratch path (vmDiskSize without nix.enable) uses the running-system modules below instead.
-    ++ lib.optionals cfg.nix.enable ([ "dm_mod" "dm_crypt" "ext4" ] ++ config.boot.initrd.luks.cryptoModules);
-    boot.initrd.kernelModules = [ "virtio_pci" "virtio_mmio" "virtio_blk" ]
-      ++ lib.optionals cfg.nix.enable ([ "dm_mod" "dm_crypt" "ext4" ] ++ config.boot.initrd.luks.cryptoModules);
+    ++ lib.optionals cfg.nix.enable (
+      [
+        "dm_mod"
+        "dm_crypt"
+        "ext4"
+      ]
+      ++ config.boot.initrd.luks.cryptoModules
+    );
+    boot.initrd.kernelModules = [
+      "virtio_pci"
+      "virtio_mmio"
+      "virtio_blk"
+    ]
+    ++ lib.optionals cfg.nix.enable (
+      [
+        "dm_mod"
+        "dm_crypt"
+        "ext4"
+      ]
+      ++ config.boot.initrd.luks.cryptoModules
+    );
     boot.initrd.checkJournalingFS = false;
 
     # device-mapper + dm-crypt for the opt-in encrypted disk pool (vmDiskSize). Loaded in the
@@ -268,7 +299,10 @@ in
     # for /scratch when nix.enable is OFF; harmless when vmDiskSize is off. (When nix.enable is on, the
     # INITRD owns the disk instead — see storeDiskScript / boot.initrd above.) The aes/xts/sha
     # crypto the cipher needs is auto-loaded by the kernel crypto API when dm-crypt requests xts(aes).
-    boot.kernelModules = [ "dm_mod" "dm_crypt" ];
+    boot.kernelModules = [
+      "dm_mod"
+      "dm_crypt"
+    ];
 
     # nix.enable only: pull the disk-backing initrd oneshot + its tools (cryptsetup, mkfs.ext4) into
     # the initrd, and order it AFTER the declarative tmpfs /nix/.rw-store mount (RequiresMountsFor)
@@ -287,7 +321,10 @@ in
     boot.initrd.systemd.services.ccvm-store-disk = lib.mkIf cfg.nix.enable {
       description = "Back the /nix/store overlay upper with the encrypted vmDiskSize disk (fail-open to tmpfs)";
       wantedBy = [ "initrd.target" ];
-      before = [ "sysroot-nix-store.mount" "initrd-fs.target" ];
+      before = [
+        "sysroot-nix-store.mount"
+        "initrd-fs.target"
+      ];
       unitConfig = {
         DefaultDependencies = false;
         # Resolve + order-After the tmpfs /nix/.rw-store mount unit WITHOUT hardcoding its escaped
@@ -336,31 +373,34 @@ in
           neededForBoot = true;
         };
         storeFs =
-          if cfg.nix.enable then {
-            # Writable store: ro lower + writable upper, overlaid at /nix/store. The overlay is set
-            # up in the initrd (store is neededForBoot). The upper (/nix/.rw-store) is tmpfs (RAM) by
-            # default; when vmDiskSize > 0 the initrd's ccvm-store-disk service mounts the encrypted
-            # disk OVER this tmpfs (fail-open) so the upper lands on disk — the overlay config here is
-            # IDENTICAL either way (only what's mounted at /nix/.rw-store changes). nix realises new
-            # paths into the upper; wiped on exit. Off by default — this branch only exists when nix.enable is on.
-            "/nix/.ro-store" = roStore;
-            "/nix/.rw-store" = {
-              device = "tmpfs";
-              fsType = "tmpfs";
-              options = [ "mode=0755" ];
-              neededForBoot = true;
-            };
-            "/nix/store" = {
-              overlay = {
-                lowerdir = [ "/nix/.ro-store" ];
-                upperdir = "/nix/.rw-store/store";
-                workdir = "/nix/.rw-store/work";
+          if cfg.nix.enable then
+            {
+              # Writable store: ro lower + writable upper, overlaid at /nix/store. The overlay is set
+              # up in the initrd (store is neededForBoot). The upper (/nix/.rw-store) is tmpfs (RAM) by
+              # default; when vmDiskSize > 0 the initrd's ccvm-store-disk service mounts the encrypted
+              # disk OVER this tmpfs (fail-open) so the upper lands on disk — the overlay config here is
+              # IDENTICAL either way (only what's mounted at /nix/.rw-store changes). nix realises new
+              # paths into the upper; wiped on exit. Off by default — this branch only exists when nix.enable is on.
+              "/nix/.ro-store" = roStore;
+              "/nix/.rw-store" = {
+                device = "tmpfs";
+                fsType = "tmpfs";
+                options = [ "mode=0755" ];
+                neededForBoot = true;
               };
-              neededForBoot = true;
+              "/nix/store" = {
+                overlay = {
+                  lowerdir = [ "/nix/.ro-store" ];
+                  upperdir = "/nix/.rw-store/store";
+                  workdir = "/nix/.rw-store/work";
+                };
+                neededForBoot = true;
+              };
+            }
+          else
+            {
+              "/nix/store" = roStore;
             };
-          } else {
-            "/nix/store" = roStore;
-          };
       in
       rootFs // storeFs;
     boot.tmp.useTmpfs = true;
@@ -501,7 +541,10 @@ in
       ++ lib.optional (cfg.claudePackage != null) cfg.claudePackage
       # Image-paste shims: a fake xclip/wl-paste that bridge the host clipboard IMAGE over the SSH
       # reverse tunnel (image-only; never host text). Inert unless the wrapper wires the tunnel.
-      ++ lib.optionals cfg.clipboard.images [ clipXclip clipWlPaste ]
+      ++ lib.optionals cfg.clipboard.images [
+        clipXclip
+        clipWlPaste
+      ]
       ++ cfg.extraPackages;
 
     # HTTPS to api.anthropic.com et al.
@@ -519,10 +562,16 @@ in
     # the store is read-only, so the channel/daemon machinery is skipped and the closure stays lean.
     nix.enable = cfg.nix.enable;
     nix.settings = lib.mkIf cfg.nix.enable {
-      experimental-features = [ "nix-command" "flakes" ]; # `nix develop`/`nix build` on flakes
+      experimental-features = [
+        "nix-command"
+        "flakes"
+      ]; # `nix develop`/`nix build` on flakes
       # Who may talk to the nix-daemon at all (request builds). Only root and the agent are nix
       # clients in this guest, so pin the set rather than leaving it the permissive default `*`.
-      allowed-users = [ "root" "ccvm" ];
+      allowed-users = [
+        "root"
+        "ccvm"
+      ];
       # SECURITY (audit S-1) — a Nix *trusted-user* is root-EQUIVALENT: it can set post-build-hook,
       # disable the build sandbox, or add unsigned substituters, all of which the root daemon honours
       # (a post-build-hook runs AS ROOT). So make the agent trusted ONLY when it already has root via

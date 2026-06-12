@@ -27,16 +27,16 @@ SHARE_SKILLS="@SHARE_SKILLS@"       # 1 = stage ~/.claude/skills/; 0 = off
 SHARE_PLUGINS="@SHARE_PLUGINS@"     # 1 = stage ~/.claude/plugins/ (off by default); 0 = off
 SHARE_CONFIG="@SHARE_CONFIG@"       # 1 = stage ~/.claude/config/ (off by default); 0 = off
 PERSISTPROJECTS="@PERSISTPROJECTS@" # 1 = mount host ~/.claude/projects rw (resume + memory persist); 0 = off
-SHAREGIT="@SHAREGIT@" # 1 = stage a sanitized host git config into the guest; 0 = off
-CLAUDEMD="@CLAUDEMD@" # path to the baked ccvm-context CLAUDE.md (empty = inject nothing)
-MODE="@MODE@" # rw (writableCwd=true, default — mirrors native claude) | overlay (secure)
-MEMLOCK="@MEMLOCK@" # 1 = mlock guest RAM (lockGuestMemory) so it can't hit host swap; 0 = off
-EGRESSALLOW="@EGRESSALLOW@" # space-separated FQDN/IP/CIDR allowlist; empty = open egress (default)
-EGRESSPORTS="@EGRESSPORTS@" # space-separated dst ports the allowlist permits (default 443)
-VERSION="@VERSION@"         # ccvm's own version string (baked from lib/mkccvm.nix)
-VMDISKSIZE="@VMDISKSIZE@"   # GiB; 0=off. >0 attaches an encrypted ephemeral disk pool (/scratch, …)
-CLIPIMAGES="@CLIPIMAGES@"   # 1 = image-paste bridge built into the guest (shims + sshd reverse-fwd); 0 = off
-CLIPGUESTPORT="@CLIPGUESTPORT@" # guest-loopback port the image-paste shims use (matches sshd PermitListen)
+SHAREGIT="@SHAREGIT@"               # 1 = stage a sanitized host git config into the guest; 0 = off
+CLAUDEMD="@CLAUDEMD@"               # path to the baked ccvm-context CLAUDE.md (empty = inject nothing)
+MODE="@MODE@"                       # rw (writableCwd=true, default — mirrors native claude) | overlay (secure)
+MEMLOCK="@MEMLOCK@"                 # 1 = mlock guest RAM (lockGuestMemory) so it can't hit host swap; 0 = off
+EGRESSALLOW="@EGRESSALLOW@"         # space-separated FQDN/IP/CIDR allowlist; empty = open egress (default)
+EGRESSPORTS="@EGRESSPORTS@"         # space-separated dst ports the allowlist permits (default 443)
+VERSION="@VERSION@"                 # ccvm's own version string (baked from lib/mkccvm.nix)
+VMDISKSIZE="@VMDISKSIZE@"           # GiB; 0=off. >0 attaches an encrypted ephemeral disk pool (/scratch, …)
+CLIPIMAGES="@CLIPIMAGES@"           # 1 = image-paste bridge built into the guest (shims + sshd reverse-fwd); 0 = off
+CLIPGUESTPORT="@CLIPGUESTPORT@"     # guest-loopback port the image-paste shims use (matches sshd PermitListen)
 
 # ---- helpers ---------------------------------------------------------------
 warn() { printf 'ccvm: %s\n' "$*" >&2; }
@@ -275,11 +275,23 @@ esac
 # shareClaudeConfig knob). Per-item CCVM_SHARE_<ITEM> overrides below take precedence.
 case "${CCVM_SHARE_CLAUDE_CONFIG:-}" in
   1 | true | yes)
-    SHARE_SETTINGS=1; SHARE_CLAUDEMD=1; SHARE_COMMANDS=1
-    SHARE_AGENTS=1; SHARE_SKILLS=1; SHARE_PLUGINS=1; SHARE_CONFIG=1 ;;
+    SHARE_SETTINGS=1
+    SHARE_CLAUDEMD=1
+    SHARE_COMMANDS=1
+    SHARE_AGENTS=1
+    SHARE_SKILLS=1
+    SHARE_PLUGINS=1
+    SHARE_CONFIG=1
+    ;;
   0 | false | no)
-    SHARE_SETTINGS=0; SHARE_CLAUDEMD=0; SHARE_COMMANDS=0
-    SHARE_AGENTS=0; SHARE_SKILLS=0; SHARE_PLUGINS=0; SHARE_CONFIG=0 ;;
+    SHARE_SETTINGS=0
+    SHARE_CLAUDEMD=0
+    SHARE_COMMANDS=0
+    SHARE_AGENTS=0
+    SHARE_SKILLS=0
+    SHARE_PLUGINS=0
+    SHARE_CONFIG=0
+    ;;
 esac
 
 # Per-item overrides (win over the back-compat block above and the baked defaults).
@@ -529,7 +541,7 @@ WS_FSDEV="local,id=ws,path=$WORKDIR,security_model=none"
 # NEVER reaches the seed by construction. Defense in depth: a final find strips any
 # .credentials.json that a directory cp dragged in at any depth.
 CLAUDEDIR="$HOME/.claude"
-if [[ -d "$CLAUDEDIR" ]]; then
+if [[ -d $CLAUDEDIR ]]; then
   CFGOUT="$SEED/claude-config"
   mkdir -p "$CFGOUT"
 
@@ -624,7 +636,8 @@ if [[ $VMDISKSIZE != 0 ]]; then
     fstype="$(stat -f -c %T "$SCRATCH_DIR" 2>/dev/null || echo unknown)"
     case "$fstype" in
       tmpfs | ramfs)
-        die "disk-image dir '$SCRATCH_DIR' is on $fstype (RAM) — a disk-backed dir is the whole point; point CCVM_SCRATCH_DIR at real disk, or set CCVM_SCRATCH_ALLOW_TMPFS=1 to override" ;;
+        die "disk-image dir '$SCRATCH_DIR' is on $fstype (RAM) — a disk-backed dir is the whole point; point CCVM_SCRATCH_DIR at real disk, or set CCVM_SCRATCH_ALLOW_TMPFS=1 to override"
+        ;;
     esac
   fi
   # Sparse: only consumes what the guest actually writes, up to this cap. Unique per run so
@@ -739,7 +752,7 @@ if [[ -n ${EGRESSALLOW// /} ]]; then
     local entry="$1" ip _
     case "$entry" in
       */* | *:*) printf '%s\n' "$entry" >>"$SEED/egress-allow" ;; # CIDR or IPv6 literal — verbatim
-      *[!0-9.]*)                                                   # has a non-IPv4 char => FQDN; resolve to A/AAAA
+      *[!0-9.]*)                                                  # has a non-IPv4 char => FQDN; resolve to A/AAAA
         while read -r ip _; do
           if [[ -n $ip ]]; then
             printf '%s\n' "$ip" >>"$SEED/egress-allow"
@@ -845,7 +858,7 @@ QEMU_PID=$!
 # In debug mode stream the guest console while it boots (killed before we hand the
 # terminal to the TUI, so it never corrupts the screen).
 if [[ $DEBUG == 1 ]]; then
-  ( tail -n +1 -F "$TMP/console.log" >&2 2>/dev/null ) &
+  (tail -n +1 -F "$TMP/console.log" >&2 2>/dev/null) &
   TAILPID=$!
 fi
 
@@ -881,10 +894,14 @@ if [[ $CLIPIMAGES == 1 ]]; then
   # found on the inherited PATH). No tool -> leave the bridge off; the guest shims then just fail to
   # connect and paste no-ops, exactly as before. Prefer the session's native protocol.
   CLIP_KIND="" CLIP_TOOL=""
-  if [[ -n ${WAYLAND_DISPLAY:-} ]] && CLIP_TOOL="$(command -v wl-paste 2>/dev/null)"; then CLIP_KIND=wl
-  elif [[ -n ${DISPLAY:-} ]] && CLIP_TOOL="$(command -v xclip 2>/dev/null)"; then CLIP_KIND=x
-  elif CLIP_TOOL="$(command -v wl-paste 2>/dev/null)"; then CLIP_KIND=wl
-  elif CLIP_TOOL="$(command -v xclip 2>/dev/null)"; then CLIP_KIND=x
+  if [[ -n ${WAYLAND_DISPLAY:-} ]] && CLIP_TOOL="$(command -v wl-paste 2>/dev/null)"; then
+    CLIP_KIND=wl
+  elif [[ -n ${DISPLAY:-} ]] && CLIP_TOOL="$(command -v xclip 2>/dev/null)"; then
+    CLIP_KIND=x
+  elif CLIP_TOOL="$(command -v wl-paste 2>/dev/null)"; then
+    CLIP_KIND=wl
+  elif CLIP_TOOL="$(command -v xclip 2>/dev/null)"; then
+    CLIP_KIND=x
   fi
   if [[ -n $CLIP_KIND ]]; then
     # Per-connection reader: read one request line from the guest shim (TARGETS | image/<type>) and

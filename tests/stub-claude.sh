@@ -114,7 +114,7 @@ command -v nix >/dev/null 2>&1 && echo "NIX:present" || echo "NIX:absent"
 # NOT be trusted, or it could regain root and `nft flush` the egress firewall. Report whether ccvm is
 # in the daemon's trusted-users so boot.sh can assert it's excluded under the nix+egress posture.
 if command -v nix >/dev/null 2>&1; then
-  tu="$( { nix config show 2>/dev/null || nix show-config 2>/dev/null || cat /etc/nix/nix.conf 2>/dev/null; } | sed -n 's/^[[:space:]]*trusted-users[[:space:]]*=[[:space:]]*//p' )"
+  tu="$({ nix config show 2>/dev/null || nix show-config 2>/dev/null || cat /etc/nix/nix.conf 2>/dev/null; } | sed -n 's/^[[:space:]]*trusted-users[[:space:]]*=[[:space:]]*//p')"
   if printf '%s' "$tu" | grep -qw ccvm; then echo "TRUSTED:agent-is-trusted"; else echo "TRUSTED:agent-not-trusted"; fi
 fi
 
@@ -139,7 +139,7 @@ fi
 # reach the guest's effective nix config — both the substituter URL and its trusted public key. The
 # boot test (nixSubst posture) asserts on these. (A real fetch is a network/human check;
 # example.invalid never resolves.) `nix config show`/`nix.conf` both name them.
-nixcfg="$( { nix config show 2>/dev/null || nix show-config 2>/dev/null || cat /etc/nix/nix.conf 2>/dev/null; } )"
+nixcfg="$({ nix config show 2>/dev/null || nix show-config 2>/dev/null || cat /etc/nix/nix.conf 2>/dev/null; })"
 if grep -q 'https://cache.example.invalid' <<<"$nixcfg"; then
   echo "SUBST:substituter-configured"
 else
