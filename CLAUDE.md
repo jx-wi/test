@@ -390,13 +390,18 @@ reopening one needs a *new* reason, not a rediscovery of the old trade-off.
   `authored-by`, bare `Claude`, no model name. This intentionally differs from the Claude
   Code CLI default; use *this* form.
 - **Config flows through `@TOKENS@`.** Scalars are baked at build time in `mkccvm.nix`
-  (`@MODE@` = `rw`/`overlay`, `@SHARE_SETTINGS@`/`@SHARE_CLAUDEMD@`/`@SHARE_COMMANDS@`/
-  `@SHARE_AGENTS@`/`@SHARE_SKILLS@`/`@SHARE_PLUGINS@`/`@SHARE_CONFIG@` = `1`/`0`, etc.).
+  (`@MODE@` = `rw`/`overlay`, `@SHARE_SETTINGS@`/`@SHARE_CLAUDEMD@`/`@SHARE_KEYBINDINGS@`/
+  `@SHARE_COMMANDS@`/`@SHARE_AGENTS@`/`@SHARE_SKILLS@`/`@SHARE_OUTPUTSTYLES@`/`@SHARE_PLUGINS@`/
+  `@SHARE_CONFIG@` = `1`/`0`, etc.).
   Values only known at launch — the workspace 9p share and SSH port — are **not** baked;
   the wrapper builds those QEMU args at runtime (the microvm.nix "runtime-share trap").
+  Adding a new `@TOKEN@` means updating BOTH the bake in `mkccvm.nix` AND the stand-in token
+  list in `tests/default.nix` (the host test bakes the wrapper itself, with fixture values) —
+  forget the latter and the token stays literal, which `tests/host.sh` catches as a failure.
 - **Runtime override pattern:** a `CCVM_*` env var overrides the baked default for one run
-  (`CCVM_WRITABLE_CWD`, `CCVM_SHARE_SETTINGS`, `CCVM_SHARE_CLAUDEMD`, `CCVM_SHARE_COMMANDS`,
-  `CCVM_SHARE_AGENTS`, `CCVM_SHARE_SKILLS`, `CCVM_SHARE_PLUGINS`, `CCVM_SHARE_CONFIG`,
+  (`CCVM_WRITABLE_CWD`, `CCVM_SHARE_SETTINGS`, `CCVM_SHARE_CLAUDEMD`, `CCVM_SHARE_KEYBINDINGS`,
+  `CCVM_SHARE_COMMANDS`, `CCVM_SHARE_AGENTS`, `CCVM_SHARE_SKILLS`, `CCVM_SHARE_OUTPUTSTYLES`,
+  `CCVM_SHARE_PLUGINS`, `CCVM_SHARE_CONFIG`,
   `CCVM_MLOCK`, `CCVM_ACCEL`); an explicit `ccvm` flag wins over the env var.
   Back-compat: `CCVM_SHARE_CLAUDE_CONFIG=0|1` toggles all claude items at once; per-item
   vars win over it.
@@ -430,6 +435,22 @@ reopening one needs a *new* reason, not a rediscovery of the old trade-off.
   `-device` args going through it.
 - **`ssh -tt` adds a PTY**, so guest stdout gets `\r` and escape sequences. When grepping
   captured guest output, use `grep -a` and `tr -d '\r'` or matches silently fail.
+- **KNOWN LIMITATION: Ctrl+Z freezes the session and there is NO guest-side fix.** claude is
+  `exec`'d as the sshd `ForceCommand` with NO job-control shell behind it, so a stopped claude has
+  nothing to `fg` it: a hard lockout (the VM has no second tty; the only escape, dropping the SSH
+  connection, tears down the whole VM). The cause is upstream Claude Code: it reads Ctrl+Z in raw
+  mode and raises a stop signal **on itself** — specifically `SIGSTOP` (the Windows port crashes
+  with "Unknown signal: SIGSTOP"). `SIGSTOP` is **uncatchable and unignorable**, so guest-side
+  mitigation does not work — `stty susp undef` (terminal SUSP) and `trap "" TSTP` (ignore SIGTSTP)
+  were both tried and had **zero effect** (removed; don't re-add — they only made `tests/boot.sh`
+  pass while the bug persisted). Ctrl+Z is also **not a rebindable keybinding** (the keybindings
+  doc lists it under "Terminal conflicts", not as an action), so `~/.claude/keybindings.json`
+  cannot disable it. Same brick as claudecode.nvim#194; related claude-code#3586/#12483. The only
+  ccvm-side fix would be an **external supervisor that auto-`SIGCONT`s claude whenever it stops**
+  (an outside process *can* continue a SIGSTOP'd child) — **deliberately NOT pursued**: a C helper
+  plus job-control/foreground-pgrp handling is too much machinery for an upstream bug Anthropic may
+  yet make configurable. Documented instead as a user caveat in the README ("Avoid Ctrl+Z").
+  Don't disable `-ixon`/Ctrl+S either — Ctrl+S is a claude keybinding (stash), not a freeze.
 - **The guest interactive shell is zsh, which has no `/dev/tcp`.** Any in-guest TCP-connect probe
   (egress checks against the allowlist, the clipboard-bridge `127.0.0.1:9180` reader — e.g. the
   ones in `tests/security-reverification.md`) relies on bash's `/dev/tcp` pseudo-device; under the

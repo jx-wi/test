@@ -228,6 +228,18 @@ in
         '';
       };
 
+      keybindings = lib.mkOption {
+        type = lib.types.bool;
+        default = defaults.share.keybindings;
+        description = ''
+          true (default): copy the host's ~/.claude/keybindings.json (your custom keyboard
+          shortcuts) into the VM, dereferencing home-manager symlinks, so the in-VM TUI uses
+          your bindings. Staged into the tmpfs ~/.claude, so in-VM writes stay ephemeral. It
+          carries no secrets (just keystroke→action maps). false: the guest uses Claude Code's
+          default bindings. Per-run: CCVM_SHARE_KEYBINDINGS=0|1.
+        '';
+      };
+
       commands = lib.mkOption {
         type = lib.types.bool;
         default = defaults.share.commands;
@@ -252,6 +264,17 @@ in
         description = ''
           true (default): copy the host's ~/.claude/skills/ directory into the VM so your
           custom skills are available. false: no custom skills. Per-run: CCVM_SHARE_SKILLS=0|1.
+        '';
+      };
+
+      outputStyles = lib.mkOption {
+        type = lib.types.bool;
+        default = defaults.share.outputStyles;
+        description = ''
+          true (default): copy the host's ~/.claude/output-styles/ directory into the VM so your
+          custom output styles are available. The ACTIVE style selection already crosses via
+          share.settings; this brings the style DEFINITIONS it points at. false: no custom output
+          styles (a selected one falls back to a built-in). Per-run: CCVM_SHARE_OUTPUTSTYLES=0|1.
         '';
       };
 

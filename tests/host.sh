@@ -73,9 +73,12 @@ ln -s "$HM_STORE/agents" "$FAKE_HOME/.claude/agents"
 # Commands dir (enabled by default), skills dir (enabled), plugins dir (off by default),
 # config dir (off by default) — assert correct staging/exclusion below.
 mkdir -p "$FAKE_HOME/.claude/commands" "$FAKE_HOME/.claude/skills" \
-  "$FAKE_HOME/.claude/plugins" "$FAKE_HOME/.claude/config"
+  "$FAKE_HOME/.claude/output-styles" "$FAKE_HOME/.claude/plugins" "$FAKE_HOME/.claude/config"
 printf 'my-command\n' >"$FAKE_HOME/.claude/commands/my-cmd.md"
 printf 'my-skill\n' >"$FAKE_HOME/.claude/skills/my-skill.md"
+printf 'my-style\n' >"$FAKE_HOME/.claude/output-styles/my-style.md"
+# keybindings.json (enabled by default) — a non-secret prefs file, staged like settings.json.
+printf '{"bindings":[]}\n' >"$FAKE_HOME/.claude/keybindings.json"
 printf 'plugin-data\n' >"$FAKE_HOME/.claude/plugins/plugin.md"
 printf 'config-data\n' >"$FAKE_HOME/.claude/config/config.json"
 # State/history items that must NEVER be staged regardless of any toggle.
@@ -123,6 +126,9 @@ if [[ -f "$CFGOUT/settings.json" ]] && grep -q "$SETTINGS_MARKER" "$CFGOUT/setti
 else
   no "share.settings: settings.json missing from seed/claude-config"
 fi
+[[ -f "$CFGOUT/keybindings.json" ]] && grep -q '"bindings"' "$CFGOUT/keybindings.json" &&
+  ok "share.keybindings: keybindings.json staged" ||
+  no "share.keybindings: keybindings.json missing from seed/claude-config"
 [[ -d "$CFGOUT/commands" && -f "$CFGOUT/commands/my-cmd.md" ]] &&
   ok "share.commands: commands/ dir staged" ||
   no "share.commands: commands/ not staged"
@@ -135,6 +141,9 @@ fi
 [[ -d "$CFGOUT/skills" && -f "$CFGOUT/skills/my-skill.md" ]] &&
   ok "share.skills: skills/ dir staged" ||
   no "share.skills: skills/ not staged"
+[[ -d "$CFGOUT/output-styles" && -f "$CFGOUT/output-styles/my-style.md" ]] &&
+  ok "share.outputStyles: output-styles/ dir staged" ||
+  no "share.outputStyles: output-styles/ not staged"
 
 # Disabled by default — must NOT be staged.
 [[ ! -d "$CFGOUT/plugins" ]] &&
