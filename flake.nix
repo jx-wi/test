@@ -51,6 +51,35 @@
       # treefmt eval per system: nixfmt (Nix) + shfmt (wrapper & test shell scripts). Drives
       # both the `formatter` output (`nix fmt`) and the `checks.formatting` CI gate.
       treefmtEval = forAllSystems (system: treefmt-nix.lib.evalModule (pkgsFor system) ./treefmt.nix);
+
+      # The mdBook documentation site (docs/). Pure Nix — no Node/Bun/npm — so the site is
+      # byte-reproducible from a commit. Built with the mdbook-linkcheck2 backend, configured in
+      # docs/book.toml as `[output.linkcheck2] warning-policy = "error"`, so a dead INTERNAL link
+      # fails the build (and therefore `checks.docs`). External links are not followed — the build
+      # sandbox has no network. The HTML lands at `<dest>/html`, which we copy to the derivation
+      # root so `result/index.html` is the site entrypoint (the Pages workflow uploads it directly).
+      docsFor =
+        system:
+        let
+          pkgs = pkgsFor system;
+        in
+        pkgs.runCommand "ccvm-docs"
+          {
+            nativeBuildInputs = [
+              pkgs.mdbook
+              pkgs.mdbook-linkcheck2
+            ];
+            # mdbook-linkcheck2 eagerly builds an HTTPS client at startup and panics ("No CA
+            # certificates were loaded") if none are present — even with `follow-web-links = false`,
+            # so it never actually makes a request. Point it at a CA bundle to satisfy the builder.
+            SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+          }
+          ''
+            cp -r ${./docs} ./docs
+            chmod -R u+w ./docs
+            mdbook build ./docs -d "$PWD/build"
+            cp -r "$PWD/build/html" "$out"
+          '';
     in
     {
       # `nix run github:jx-wi/ccvm` works standalone; defaults mirror native claude
@@ -64,6 +93,7 @@
         # (recipe in CLAUDE.md, "Build / test / debug"), which keeps every output correctly typed.
         guest-store = partsAll.${system}.storeImage; # ro squashfs /nix/store image
         guest-toplevel = partsAll.${system}.toplevel; # full guest system closure
+        docs = docsFor system; # the mdBook documentation site (GitHub Pages artifact)
       });
 
       apps = forAllSystems (
@@ -95,6 +125,8 @@
               openssh
               shellcheck
               nixfmt
+              mdbook # build/serve the docs site (`mdbook serve docs`)
+              mdbook-linkcheck2 # internal-link checker backend used by `nix build .#docs`
             ];
           };
         }
@@ -117,6 +149,7 @@
           guest-image = partsAll.${system}.storeImage;
           wrapper = partsAll.${system}.wrapper;
           formatting = treefmtEval.${system}.config.build.check self;
+          docs = docsFor system; # builds the site; fails on dead internal links (linkcheck2)
         }
         // (import ./tests { inherit pkgs; })
       );
