@@ -1,23 +1,44 @@
 {
   "nodes": {
+    "claude-code": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1781217107,
+        "narHash": "sha256-dAsZf9u3oQb3LQ40qpbqubcBd6lZtXrM66akiNwTiOQ=",
+        "owner": "ryoppippi",
+        "repo": "nix-claude-code",
+        "rev": "9af8f2c35681e5dc4f449fd79051f54f19b6636d",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ryoppippi",
+        "repo": "nix-claude-code",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1780243769,
-        "narHash": "sha256-x5UQuRsH3MqI0U9afaXSNqzTPSeZlRLvFAav2Ux1pNw=",
+        "lastModified": 1780902259,
+        "narHash": "sha256-q8yYEC5f1mFlQO9RGna4LTc9QrcvWunX6FYp83munkQ=",
         "owner": "nixos",
         "repo": "nixpkgs",
-        "rev": "331800de5053fcebacf6813adb5db9c9dca22a0c",
+        "rev": "bd0ff2d3eac24699c3664d5966b9ef36f388e2ca",
         "type": "github"
       },
       "original": {
         "owner": "nixos",
-        "ref": "nixos-unstable",
+        "ref": "nixos-26.05",
         "repo": "nixpkgs",
         "type": "github"
       }
     },
     "root": {
       "inputs": {
+        "claude-code": "claude-code",
         "nixpkgs": "nixpkgs",
         "treefmt-nix": "treefmt-nix"
       }

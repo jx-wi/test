@@ -290,11 +290,24 @@ reopening one needs a *new* reason, not a rediscovery of the old trade-off.
   rarely hits. Cheap lever: bump 9p `msize` and add a mode-aware cache (`cache=loose`/`mmap` is
   fine for the ro overlay lower/config/seed, but risks stale reads on the live rw workspace).
   Don't reach for virtiofs without that benchmark first.
+- **`claude-code` comes from a community flake; nixpkgs is pinned stable.** nixpkgs is pinned to
+  the **stable release (`nixos-26.05`)**, not `nixos-unstable`. The old reason for unstable —
+  tracking a fast-moving `claude-code` — no longer applies: `claude-code` now comes from the
+  **community `github:ryoppippi/nix-claude-code` flake** (input `claude-code`, `follows` our
+  nixpkgs). Its `overlays.default` sets `pkgs.claude-code`, so every existing `pkgs.claude-code`
+  reference (`lib/defaults.nix`, `guest/default.nix`) transparently picks up the community build,
+  kept current independent of the nixpkgs channel. **It only reaches a home-manager consumer
+  because `modules/home-manager.nix` closes over the `claude-code` input and applies the overlay
+  to the consumer's own `pkgs`** (`pkgs.extend`) — a downstream flake has no view of our inputs
+  otherwise; keep that wiring. The package is still **unfree** (pname `claude`, not `claude-code` —
+  so an `allowUnfreePredicate` must match `"claude"`) and its FOD still downloads the prebuilt
+  binary from `storage.googleapis.com` (see the hardened-egress note above).
 - **No published binary cache (first-run stays a local build).** Most of the guest closure
   substitutes from `cache.nixos.org`, so first-run is bounded — mostly download + the
-  ccvm-specific squashfs/toplevel build (~minutes). Re-serving the **unfree** `claude-code` path
-  from a public cache is a redistribution problem. Net: bounded win, licensing headache. Don't
-  re-propose a public cache without a new reason; if first-run ever hurts, shrink the closure.
+  ccvm-specific squashfs/toplevel build (~minutes). The **unfree** `claude-code` path is not on
+  `cache.nixos.org`, and re-serving it from a public cache is a redistribution problem. Net:
+  bounded win, licensing headache. Don't re-propose a public cache without a new reason; if
+  first-run ever hurts, shrink the closure.
 
 ## Build / test / debug
 

@@ -2,8 +2,19 @@
   description = "ccvm — run Claude Code in a throw-away microVM with zero setup";
 
   inputs = {
-    # nixos-unstable: claude-code is unfree and moves fast.
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+    # Pinned to the STABLE release: the guest closure no longer needs unstable to track
+    # claude-code (that now comes from the claude-code input below), so we trade churn for
+    # the reproducibility/stability of a release channel.
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-26.05";
+
+    # claude-code: the community nix-claude-code flake, which packages the latest claude-code
+    # independently of the nixpkgs channel and stays current. Its `overlays.default` sets
+    # `pkgs.claude-code`, so every existing `pkgs.claude-code` reference picks it up. Follows
+    # our nixpkgs so it adds no second nixpkgs to the closure.
+    claude-code = {
+      url = "github:ryoppippi/nix-claude-code";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
 
     # treefmt-nix: one `nix fmt` entrypoint + a `nix flake check` formatting gate. Pinned to
     # follow our nixpkgs so it pulls no second nixpkgs into the closure.
@@ -15,6 +26,7 @@
     {
       self,
       nixpkgs,
+      claude-code,
       treefmt-nix,
     }:
     let
@@ -29,6 +41,8 @@
         import nixpkgs {
           inherit system;
           config.allowUnfree = true; # claude-code is unfree
+          # `pkgs.claude-code` -> the community nix-claude-code build (latest, follows our nixpkgs).
+          overlays = [ claude-code.overlays.default ];
         };
 
       # Default-config ccvm build products for each system (wrapper + guest artifacts).
@@ -113,7 +127,10 @@
       # an "unknown flake output" warning. Consume as `ccvm.homeModules.default`. (nixvim made the
       # same move; it only keeps a `homeManagerModules` alias — and thus the warning — for its
       # existing users, which ccvm has none of, so there is nothing to alias.)
-      homeModules.default = import ./modules/home-manager.nix;
+      # Passed the claude-code input so the module can apply its overlay to the consumer's own
+      # pkgs (a home-manager user's nixpkgs has no view of our inputs otherwise) — keeping the
+      # standalone and home-manager paths on the same community claude-code build.
+      homeModules.default = import ./modules/home-manager.nix { inherit claude-code; };
       homeModules.ccvm = self.homeModules.default;
     };
 }

@@ -3,6 +3,11 @@
 # Each option feeds lib/mkccvm.nix, which builds a self-contained guest image and bakes
 # it into the wrapper. Changing memory/cores is cheap (runtime QEMU args); changing
 # package/extraPackages/nix.enable rebuilds the guest closure.
+#
+# Exposed from the flake as `import ./modules/home-manager.nix { inherit claude-code; }`, so it
+# closes over the community nix-claude-code flake — a consumer's nixpkgs has no view of our
+# inputs, so we apply claude-code's overlay to *their* pkgs to land the same `pkgs.claude-code`.
+{ claude-code }:
 {
   config,
   lib,
@@ -11,10 +16,13 @@
 }:
 let
   cfg = config.programs.ccvm;
-  mkCcvm = import ../lib/mkccvm.nix { inherit pkgs; };
+  # The consumer's pkgs with the community claude-code overlay applied, so `package` (and the
+  # guest's `pkgs.claude-code`) resolve to the same build the standalone flake uses.
+  pkgs' = pkgs.extend claude-code.overlays.default;
+  mkCcvm = import ../lib/mkccvm.nix { pkgs = pkgs'; };
   # Option defaults come from the SAME source mkccvm.nix uses, so a default can't drift
   # between the two. Only the user-facing descriptions live here.
-  defaults = import ../lib/defaults.nix { inherit pkgs; };
+  defaults = import ../lib/defaults.nix { pkgs = pkgs'; };
   ccvmPkg =
     (mkCcvm {
       inherit (cfg)
